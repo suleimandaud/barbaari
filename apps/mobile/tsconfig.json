@@ -1,0 +1,11 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "types": ["react"],
+    "paths": {
+      "@barbaari/shared": ["../../packages/shared/src"]
+    }
+  },
+  "include": ["app", "components", "../../packages/shared/src"]
+}

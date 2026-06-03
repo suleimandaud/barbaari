@@ -1,0 +1,21 @@
+{
+  "name": "barbaari",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "mobile": "npm --workspace @barbaari/mobile run start",
+    "daycare": "npm --workspace @barbaari/daycare-web run dev",
+    "super-admin": "npm --workspace @barbaari/super-admin run dev",
+    "build": "npm --workspaces --if-present run build",
+    "typecheck": "npm --workspaces --if-present run typecheck",
+    "test:e2e": "playwright test --config playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "typescript": "^5.6.3"
+  }
+}

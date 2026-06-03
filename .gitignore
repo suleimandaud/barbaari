@@ -1,0 +1,29 @@
+
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+dist/
+build/
+.expo/
+apps/mobile/.expo/
+apps/daycare-web/dist/
+apps/super-admin/dist/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Laravel generated/cache/log files
+apps/backend/storage/logs/*
+apps/backend/storage/framework/cache/*
+apps/backend/storage/framework/sessions/*
+apps/backend/storage/framework/views/*
+apps/backend/bootstrap/cache/*.php
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(composer require *)",
+      "Bash(php artisan *)",
+      "Bash(php -l app/Http/Controllers/ApiController.php)",
+      "Bash(php -l app/Mail/OrganizationInvitationMail.php)",
+      "Bash(php -l app/Services/StripeService.php)",
+      "Bash(php -l app/Http/Middleware/EnsureActiveSubscription.php)",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(php -l /Users/pioneer/barbaari/apps/backend/app/Mail/SubscriptionActivatedMail.php)",
+      "Bash(php -l /Users/pioneer/barbaari/apps/backend/app/Mail/PlatformInvoiceMail.php)",
+      "Bash(php -l /Users/pioneer/barbaari/apps/backend/app/Providers/AppServiceProvider.php)",
+      "Bash(php -l /Users/pioneer/barbaari/apps/backend/app/Http/Controllers/ApiController.php)",
+      "Bash(php -l /Users/pioneer/barbaari/apps/backend/app/Http/Controllers/AuthController.php)",
+      "Bash(php -l /Users/pioneer/barbaari/apps/backend/app/Services/StripeService.php)"
+    ]
+  }
+}

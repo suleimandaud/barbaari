@@ -4,6 +4,9 @@ use App\Http\Controllers\ApiController;
 use App\Http\Controllers\AuthController;
 use Illuminate\Support\Facades\Route;
 
+Route::get('public/pricing-plans', [ApiController::class, 'publicPricingPlans']);
+Route::post('registration-applications', [ApiController::class, 'createFacilityRegistrationApplication'])->middleware('throttle:10,1');
+
 Route::prefix('auth')->middleware('throttle:auth')->group(function () {
     Route::post('register', [AuthController::class, 'register']);
     Route::post('login', [AuthController::class, 'login']);
@@ -182,6 +185,10 @@ Route::middleware(['auth:sanctum', 'subscription.active'])->group(function () {
         Route::get('billing/dashboard', [ApiController::class, 'platformBillingDashboard'])->middleware('role:super_admin');
         Route::get('organizations', [ApiController::class, 'platformOrganizations']);
         Route::post('organizations', [ApiController::class, 'createOrganization'])->middleware('role:super_admin');
+        Route::get('registration-applications', [ApiController::class, 'platformRegistrationApplications'])->middleware('role:super_admin');
+        Route::post('registration-applications/{application}/approve', [ApiController::class, 'approveRegistrationApplication'])->middleware('role:super_admin');
+        Route::post('registration-applications/{application}/reject', [ApiController::class, 'rejectRegistrationApplication'])->middleware('role:super_admin');
+        Route::post('registration-applications/{application}/follow-up', [ApiController::class, 'requestRegistrationApplicationFollowUp'])->middleware('role:super_admin');
         Route::post('organizations/{organization}/status', [ApiController::class, 'updateOrganizationStatus']);
         Route::post('organizations/{organization}/generate-invoice', [ApiController::class, 'generateOrgInvoice'])->middleware('role:super_admin');
         Route::patch('organizations/{organization}/location', [ApiController::class, 'updateOrganizationLocation'])->middleware('role:super_admin');

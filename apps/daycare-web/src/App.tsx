@@ -5,6 +5,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { AcceptInvitePage } from "./pages/AcceptInvitePage";
+import { RegisterProviderPage } from "./pages/RegisterProviderPage";
 import { SubscriptionPaymentPage } from "./pages/SubscriptionPaymentPage";
 import { SubscriptionSuccessPage } from "./pages/SubscriptionSuccessPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -34,6 +35,8 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/register" element={<RegisterProviderPage />} />
+        <Route path="/apply" element={<RegisterProviderPage />} />
         <Route path="/invite/:token" element={<AcceptInvitePage />} />
         <Route path="/accept-invite/:token" element={<AcceptInvitePage />} />
         <Route path="*" element={<NotFoundPage />} />

@@ -5,7 +5,7 @@ import { Baby, Bell, CalendarCheck, ClipboardList, CreditCard, FileClock, FileTe
 import { authApi, notificationsApi } from "@barbaari/shared";
 import { clearSession } from "../services/auth";
 
-const navItems: Array<[string, string, LucideIcon]> = [
+const centerNavItems: Array<[string, string, LucideIcon]> = [
   ["Attendance Dashboard", "/", CalendarCheck],
   ["Attendance Operations", "/attendance-operations", FileText],
   ["Children", "/children", Baby],
@@ -15,6 +15,17 @@ const navItems: Array<[string, string, LucideIcon]> = [
   ["Attendance Audit Logs", "/audit-logs", FileClock],
   ["Attendance Reports", "/reports", FileText],
   ["Devices / Tablets", "/devices", MonitorSmartphone],
+  ["Subscription / Billing", "/subscription-billing", CreditCard],
+  ["Settings", "/settings", Settings]
+];
+
+const familyNavItems: Array<[string, string, LucideIcon]> = [
+  ["Dashboard", "/", CalendarCheck],
+  ["Children", "/children", Baby],
+  ["Parents / Guardians", "/guardians", Users],
+  ["Attendance", "/attendance-operations", FileText],
+  ["Tablet / Kiosk Mode", "/attendance-operations?tab=kiosk", MonitorSmartphone],
+  ["Reports / Audit", "/reports", FileClock],
   ["Subscription / Billing", "/subscription-billing", CreditCard],
   ["Settings", "/settings", Settings]
 ];
@@ -44,6 +55,7 @@ export function AppLayout() {
   const routerLocation = useLocation();
   const [unread, setUnread] = useState(0);
   const [organizationName, setOrganizationName] = useState("Barbaari");
+  const [facilityType, setFacilityType] = useState("center_daycare");
 
   useEffect(() => {
     const title = PAGE_TITLES[routerLocation.pathname] ?? "Barbaari";
@@ -53,7 +65,10 @@ export function AppLayout() {
   useEffect(() => {
     let mounted = true;
     authApi.me().then((response) => {
-      if (mounted) setOrganizationName(response.user?.organization?.name ?? "Barbaari");
+      if (mounted) {
+        setOrganizationName(response.user?.organization?.name ?? "Barbaari");
+        setFacilityType(response.user?.organization?.facility_type ?? "center_daycare");
+      }
     }).catch(() => {
       if (mounted) setOrganizationName("Barbaari");
     });
@@ -70,7 +85,7 @@ export function AppLayout() {
       <aside className="sidebar">
         <div className="brand"><div className="brand-mark">{organizationName.slice(0, 1).toUpperCase()}</div><div><strong>{organizationName}</strong><span>Attendance Ops</span></div></div>
         <nav>
-          {navItems.map(([label, path, Icon]) => (
+          {(facilityType === "family_child_care" ? familyNavItems : centerNavItems).map(([label, path, Icon]) => (
             <NavLink key={label} to={path} end={path === "/"}><Icon size={18} /><span>{label}</span></NavLink>
           ))}
         </nav>

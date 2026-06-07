@@ -164,6 +164,7 @@ export function OrganizationDetailsPage() {
         <Panel title="Profile" action={<Badge tone={statusTone(org.status)}>{titleize(org.status)}</Badge>}>
           <div className="grid three">
             <article className="ops"><span>City</span><strong>{org.city ?? "—"}</strong></article>
+            <article className="ops"><span>Facility type</span><strong>{titleize(org.facility_type ?? "center_daycare")}</strong></article>
             <article className="ops"><span>Children</span><strong>{org.children ?? 0}</strong></article>
             <article className="ops"><span>MRR</span><strong>${Number(org.mrr ?? 0).toFixed(2)}</strong></article>
             <article className="ops"><span>Plan</span><strong>{org.plan ?? "—"}</strong></article>

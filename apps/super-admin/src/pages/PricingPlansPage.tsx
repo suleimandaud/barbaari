@@ -5,7 +5,7 @@ import { Alert, Badge, DataTable, ErrorState, Header, LoadingState, Modal } from
 import { useAsyncData } from "../hooks/useAsyncData";
 import { errorMessage, money, titleize } from "../utils/format";
 
-const emptyPlan = { name: "", code: "", monthly_price: "0", yearly_price: "0", currency: "USD", child_limit: "", staff_limit: "", device_limit: "", features: "", status: "active", featured: false, stripe_product_id: "", stripe_monthly_price_id: "", stripe_yearly_price_id: "" };
+const emptyPlan = { name: "", code: "", monthly_price: "0", yearly_price: "0", currency: "USD", child_limit: "", staff_limit: "", device_limit: "", features: "", status: "active", featured: false, available_for_family_child_care: true, available_for_center_daycare: true, stripe_product_id: "", stripe_monthly_price_id: "", stripe_yearly_price_id: "" };
 
 export function PricingPlansPage() {
   const { data, loading, error, reload } = useAsyncData(async () => (await superAdminApi.pricingPlans()).pricing_plans, []);
@@ -39,6 +39,8 @@ export function PricingPlansPage() {
         features: String(form.features).split(",").map((item) => item.trim()).filter(Boolean),
         status: form.status,
         featured: Boolean(form.featured),
+        available_for_family_child_care: Boolean(form.available_for_family_child_care),
+        available_for_center_daycare: Boolean(form.available_for_center_daycare),
         stripe_product_id: form.stripe_product_id || null,
         stripe_monthly_price_id: form.stripe_monthly_price_id || null,
         stripe_yearly_price_id: form.stripe_yearly_price_id || null,
@@ -77,6 +79,7 @@ export function PricingPlansPage() {
       { header: "Yearly", render: (row: any) => `${row.currency ?? "USD"} ${money(row.yearly_price)}` },
       { header: "Limits", render: (row: any) => <span>{row.child_limit ?? "Unlimited"} children / {row.staff_limit ?? "Unlimited"} staff / {row.device_limit ?? "Unlimited"} devices</span> },
       { header: "Features", render: (row: any) => <div className="feature-list">{(row.features ?? []).map((feature: string) => <Badge key={feature}>{titleize(feature)}</Badge>)}</div> },
+      { header: "Facility availability", render: (row: any) => <div className="feature-list">{row.available_for_family_child_care ? <Badge>Family Child Care</Badge> : null}{row.available_for_center_daycare ? <Badge>Center Daycare</Badge> : null}</div> },
       { header: "Status", render: (row: any) => <Badge tone={row.status === "active" ? "success" : "danger"}>{row.status}</Badge> },
       { header: "Actions", render: (row: any) => <div className="row-actions"><button className="secondary" onClick={() => open(row)}>Edit</button><button className="secondary" onClick={() => toggle(row)}>{row.status === "active" ? "Deactivate" : "Activate"}</button></div> }
     ]} />}
@@ -96,6 +99,8 @@ export function PricingPlansPage() {
         <input value={form.stripe_monthly_price_id ?? ""} onChange={(event) => setForm({ ...form, stripe_monthly_price_id: event.target.value })} placeholder="Stripe monthly price ID" />
         <input value={form.stripe_yearly_price_id ?? ""} onChange={(event) => setForm({ ...form, stripe_yearly_price_id: event.target.value })} placeholder="Stripe yearly price ID" />
         <label className="stack"><span>Featured</span><select value={form.featured ? "yes" : "no"} onChange={(event) => setForm({ ...form, featured: event.target.value === "yes" })}><option value="no">No</option><option value="yes">Yes</option></select></label>
+        <label className="stack"><span>Family child care</span><select value={form.available_for_family_child_care ? "yes" : "no"} onChange={(event) => setForm({ ...form, available_for_family_child_care: event.target.value === "yes" })}><option value="yes">Available</option><option value="no">Hidden</option></select></label>
+        <label className="stack"><span>Center daycare</span><select value={form.available_for_center_daycare ? "yes" : "no"} onChange={(event) => setForm({ ...form, available_for_center_daycare: event.target.value === "yes" })}><option value="yes">Available</option><option value="no">Hidden</option></select></label>
         <button className="primary" disabled={saving}>{saving ? "Saving..." : "Save plan"}</button>
       </form>
     </Modal> : null}

@@ -77,7 +77,7 @@ export function SettingsPage() {
 
   return (
     <section className="page">
-      <PageHeader eyebrow="Organization" title="Organization profile" description="Manage daycare business details and licensing information." />
+      <PageHeader eyebrow="Organization" title="Organization profile" description="Manage provider business details, licensing information, and attendance location." />
       <SuccessAlert message={success} />
       <ErrorAlert message={actionError} />
       {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : data ? (
@@ -100,6 +100,7 @@ export function SettingsPage() {
           <Panel title="Status / Settings">
             <div className="form-grid labeled-grid">
               <Field label="Timezone" value={form.timezone} onChange={(value) => setForm({ ...form, timezone: value })} />
+              <ReadOnly label="Facility type" value={String(data.facility_type ?? "center_daycare").replace(/_/g, " ")} />
               <ReadOnly label="Organization status" value={<Badge tone={data.status === "active" ? "success" : "warning"}>{data.status ?? "active"}</Badge>} />
               <ReadOnly label="Subscription plan" value={data.subscription?.pricing_plan?.name ?? data.plan ?? "Starter"} />
               <ReadOnly label="Subscription status" value={<Badge tone={data.subscription?.status === "active" ? "success" : "warning"}>{data.subscription?.status ?? "active"}</Badge>} />
@@ -110,7 +111,7 @@ export function SettingsPage() {
               <Field label="Latitude" type="number" value={form.latitude} onChange={(value) => setForm({ ...form, latitude: value })} />
               <Field label="Longitude" type="number" value={form.longitude} onChange={(value) => setForm({ ...form, longitude: value })} />
               <Field label="Allowed attendance radius (meters)" type="number" value={form.attendance_radius_meters} onChange={(value) => setForm({ ...form, attendance_radius_meters: value })} />
-              <p className="muted full">Attendance check-in and check-out require device location and are blocked outside this radius. Set the daycare center coordinates before using live attendance operations.</p>
+              <p className="muted full">Attendance check-in and check-out require device location and are blocked outside this radius. For family child care, set the provider home/location coordinates before using live attendance operations.</p>
             </div>
           </Panel>
           <button className="primary settings-submit" disabled={saving}>{saving ? "Saving..." : "Update organization"}</button>

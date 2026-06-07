@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { absenceApi, attendanceApi, reportsApi } from "@barbaari/shared";
+import { absenceApi, attendanceApi, organizationApi, reportsApi } from "@barbaari/shared";
 import { ErrorAlert, SuccessAlert } from "../components/Alerts";
 import { DataTable } from "../components/DataTable";
 import { PageHeader, Panel } from "../components/Page";
@@ -21,12 +21,13 @@ export function ReportsPage() {
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const { data, loading, error, reload } = useAsyncData(async () => {
-    const [attendance, absences, auditLogs] = await Promise.all([
+    const [attendance, absences, auditLogs, organization] = await Promise.all([
       attendanceApi.managerList(),
       absenceApi.list(),
-      attendanceApi.auditLogs()
+      attendanceApi.auditLogs(),
+      organizationApi.get()
     ]);
-    return { attendance: attendance.attendance ?? [], absences: absences.absence_records ?? [], auditLogs: auditLogs.audit_logs ?? [] };
+    return { attendance: attendance.attendance ?? [], absences: absences.absence_records ?? [], auditLogs: auditLogs.audit_logs ?? [], organization: organization.organization };
   }, []);
 
   const reportRows = useMemo(() => {
@@ -35,7 +36,7 @@ export function ReportsPage() {
       const date = record.absenceDate ?? record.absence_date;
       return (!fromDate || date >= fromDate) && (!toDate || date <= toDate);
     });
-    return [
+    const rows = [
       { report: "Daily attendance", value: attendance.length, detail: "All check-in/check-out records in range" },
       { report: "Present children", value: attendance.filter((record: any) => statusOf(record) === "checked_in" && !record.checkOutTime).length, detail: "Children currently checked in" },
       { report: "Checked out children", value: attendance.filter((record: any) => record.checkOutTime || statusOf(record) === "checked_out").length, detail: "Completed checkout records" },
@@ -44,9 +45,12 @@ export function ReportsPage() {
       { report: "Missing checkouts", value: attendance.filter((record: any) => statusOf(record) === "missing_checkout").length, detail: "Records that need checkout review" },
       { report: "Corrections", value: attendance.filter((record: any) => record.corrected).length, detail: "Attendance records with corrections" },
       { report: "Signature records", value: attendance.filter((record: any) => record.hasSignature || record.signatureName || record.signature_name).length, detail: "Signed guardian, pickup, or staff-assisted records" },
-      { report: "Audit history", value: data?.auditLogs?.length ?? 0, detail: "Attendance audit log entries" },
-      { report: "Classroom summary", value: new Set(attendance.map((record: any) => record.classroom).filter(Boolean)).size, detail: "Classrooms represented in the selected range" }
+      { report: "Audit history", value: data?.auditLogs?.length ?? 0, detail: "Attendance audit log entries" }
     ];
+    if (data?.organization?.facility_type !== "family_child_care") {
+      rows.push({ report: "Classroom summary", value: new Set(attendance.map((record: any) => record.classroom).filter(Boolean)).size, detail: "Classrooms represented in the selected range" });
+    }
+    return rows;
   }, [data, fromDate, toDate]);
 
   async function exportAttendance() {
@@ -62,7 +66,7 @@ export function ReportsPage() {
 
   return (
     <section className="page">
-      <PageHeader eyebrow="Attendance reporting" title="Attendance Reports" description="Daily attendance, present, checked-out, early checkout, absence, missing checkout, signature, audit, and classroom summary reports." action={<button className="secondary" onClick={exportAttendance}>Export attendance</button>} />
+      <PageHeader eyebrow="Attendance reporting" title="Attendance Reports" description={data?.organization?.facility_type === "family_child_care" ? "Child-based daily attendance, check-in/check-out history, absences, signatures, geofence blocks, and audit records." : "Daily attendance, present, checked-out, early checkout, absence, missing checkout, signature, audit, and classroom summary reports."} action={<button className="secondary" onClick={exportAttendance}>Export attendance</button>} />
       <SuccessAlert message={message} />
       <ErrorAlert message={errorMessage} />
       <Panel title="Date range">

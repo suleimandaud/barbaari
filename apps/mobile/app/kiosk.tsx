@@ -78,7 +78,7 @@ export default function Kiosk() {
   const [pin, setPin] = useState("");
   const [unlocked, setUnlocked] = useState(false);
   const [unlockedUser, setUnlockedUser] = useState<MobileUser | null>(null);
-  const [data, setData] = useState<{ children: any[]; classrooms: any[]; attendance: any[]; absences: any[]; staff?: any[]; timezone?: string; localDate?: string; scopeLabel?: string } | null>(null);
+  const [data, setData] = useState<{ children: any[]; classrooms: any[]; attendance: any[]; absences: any[]; staff?: any[]; timezone?: string; localDate?: string; scopeLabel?: string; facility_type?: string; facilityType?: string; uses_classrooms?: boolean } | null>(null);
   const [selectedClassroomId, setSelectedClassroomId] = useState("");
   const [selectedChildId, setSelectedChildId] = useState("");
   const [selectedAction, setSelectedAction] = useState<Action>("in");
@@ -137,15 +137,16 @@ export default function Kiosk() {
     setLoadError("");
     try {
       const response = await mobileApi.tabletBootstrap(selectedMode);
-      if (!response.classrooms.length) {
+      const usesClassrooms = response.uses_classrooms !== false && response.facility_type !== "family_child_care" && response.facilityType !== "family_child_care";
+      if (!response.children.length) {
         setData(response);
-        setLoadError(selectedMode === "guardian" ? "No linked children are available for this parent/guardian account." : "No classrooms available for this account.");
+        setLoadError(selectedMode === "guardian" ? "No linked children are available for this parent/guardian account." : "No children are available for this account.");
         return;
       }
       setData(response);
-      setStep("classroom");
+      setStep(usesClassrooms ? "classroom" : "child");
     } catch {
-      setLoadError("Could not load classrooms. Check backend connection or staff permissions.");
+      setLoadError("Could not load attendance tablet records. Check backend connection or account permissions.");
       setStep("welcome");
     } finally {
       setSaving(false);
@@ -363,7 +364,7 @@ export default function Kiosk() {
             ) : (
               <View style={styles.unlock}>
                 <Text style={styles.unlockedText}>{modeLabel} unlocked by: {unlockedUser?.name ?? user?.name ?? "User"}</Text>
-                <Button onPress={() => loadTabletData(mode)}>{saving ? "Loading..." : "Continue to classrooms"}</Button>
+                <Button onPress={() => loadTabletData(mode)}>{saving ? "Loading..." : (data?.uses_classrooms === false || data?.facility_type === "family_child_care" ? "Continue to children" : "Continue to classrooms")}</Button>
               </View>
             )}
           </View>
@@ -388,7 +389,7 @@ export default function Kiosk() {
             <View style={styles.childGrid}>
               {classroomChildren.map((child) => <TouchableOpacity key={child.id} style={styles.childCard} onPress={() => selectChild(child)}>
                 <Text style={styles.childName}>{child.name}</Text>
-                <Text style={styles.detail}>{child.childCode ?? child.child_code ?? "No child code"} - {child.classroom ?? "Unassigned"}</Text>
+                <Text style={styles.detail}>{child.childCode ?? child.child_code ?? "No child code"} - {(data?.facility_type === "family_child_care" || data?.facilityType === "family_child_care") ? "Family child care" : (child.classroom ?? "Unassigned")}</Text>
                 <Text style={styles.detail}>{child.age ?? child.dateOfBirth ?? child.date_of_birth ?? "Age not listed"}</Text>
                 <Text style={styles.detail}>{child.guardianNames?.join(", ") || "Guardians not listed"}</Text>
                 <Badge tone={statusFor(child, data.attendance, data.absences, data.localDate ?? "") === "checked in" ? "success" : "neutral"}>{statusFor(child, data.attendance, data.absences, data.localDate ?? "")}</Badge>

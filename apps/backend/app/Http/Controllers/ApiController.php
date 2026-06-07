@@ -13,6 +13,7 @@ use App\Models\Conversation;
 use App\Models\DailyChildNote;
 use App\Models\Device;
 use App\Models\Document;
+use App\Models\FacilityRegistrationApplication;
 use App\Models\Guardian;
 use App\Models\IncidentReport;
 use App\Models\Invoice;
@@ -81,6 +82,63 @@ class ApiController extends Controller
         ]);
     }
 
+    public function publicPricingPlans(Request $request)
+    {
+        $facilityType = $request->string('facility_type')->toString();
+        $query = PricingPlan::where('status', 'active');
+        if ($facilityType === 'family_child_care') {
+            $query->where('available_for_family_child_care', true);
+        } elseif ($facilityType === 'center_daycare') {
+            $query->where('available_for_center_daycare', true);
+        }
+
+        return response()->json(['pricing_plans' => $query->orderBy('monthly_price')->get()->map(fn (PricingPlan $plan) => $this->pricingPlanPayload($plan))]);
+    }
+
+    public function createFacilityRegistrationApplication(Request $request)
+    {
+        $data = $request->validate([
+            'facility_type' => ['required', 'in:family_child_care,center_daycare'],
+            'business_name' => ['required', 'string', 'max:255'],
+            'legal_name' => ['nullable', 'string', 'max:255'],
+            'owner_name' => ['required', 'string', 'max:255'],
+            'owner_email' => ['required', 'email', 'max:255'],
+            'phone' => ['nullable', 'string', 'max:80'],
+            'city' => ['nullable', 'string', 'max:120'],
+            'state' => ['nullable', 'string', 'max:120'],
+            'country' => ['nullable', 'string', 'max:120'],
+            'address' => ['nullable', 'string', 'max:255'],
+            'timezone' => ['nullable', 'string', 'max:80'],
+            'license_number' => ['nullable', 'string', 'max:255'],
+            'license_status' => ['nullable', 'in:not_provided,pending,verified,rejected,expired'],
+            'pricing_plan_id' => ['nullable', 'exists:pricing_plans,id'],
+            'billing_cycle' => ['nullable', 'in:monthly,yearly'],
+            'notes' => ['nullable', 'string', 'max:3000'],
+        ]);
+
+        if (! empty($data['pricing_plan_id'])) {
+            $plan = PricingPlan::findOrFail($data['pricing_plan_id']);
+            abort_if(
+                ($data['facility_type'] === 'family_child_care' && ! $plan->available_for_family_child_care)
+                || ($data['facility_type'] === 'center_daycare' && ! $plan->available_for_center_daycare),
+                422,
+                'The selected plan is not available for this facility type.'
+            );
+        }
+
+        $application = FacilityRegistrationApplication::create([
+            ...$data,
+            'billing_cycle' => $data['billing_cycle'] ?? 'monthly',
+            'license_status' => ! empty($data['license_number']) ? ($data['license_status'] ?? 'pending') : ($data['license_status'] ?? 'not_provided'),
+            'status' => 'pending',
+        ]);
+
+        return response()->json([
+            'application' => $this->registrationApplicationPayload($application->fresh('pricingPlan')),
+            'message' => 'Registration application received. Barbaari will review it before creating the provider workspace.',
+        ], 201);
+    }
+
     public function organization(Request $request)
     {
         $organization = Organization::with('settings')->findOrFail($this->orgId($request));
@@ -138,6 +196,8 @@ class ApiController extends Controller
     {
         $mode = $request->string('mode')->toString() ?: 'guardian';
         $timezone = $this->attendanceTimezone($this->orgId($request));
+        $organization = $request->user()->organization;
+        $facilityType = $organization?->facility_type ?? 'center_daycare';
         $childrenQuery = $this->tabletChildren($request, $mode);
         $children = $childrenQuery->with('classroom', 'guardians')->get();
         $childIds = $children->pluck('id');
@@ -162,6 +222,9 @@ class ApiController extends Controller
         return response()->json([
             'user' => $request->user()->load('organization', 'staffProfile.classroom'),
             'mode' => $mode,
+            'facility_type' => $facilityType,
+            'facilityType' => $facilityType,
+            'uses_classrooms' => $facilityType === 'center_daycare',
             'scope' => $this->tabletScope($request, $mode),
             'scopeLabel' => $this->tabletScopeLabel($request, $mode),
             'timezone' => $timezone,
@@ -874,7 +937,7 @@ class ApiController extends Controller
     public function attendanceAudits(Request $request)
     {
         $ids = AttendanceRecord::where('organization_id', $this->orgId($request))->pluck('id');
-        $attendanceLogs = AttendanceAuditLog::with('attendanceRecord.child.classroom', 'attendanceRecord.classroom', 'editedBy')
+        $attendanceLogs = AttendanceAuditLog::with('attendanceRecord.child.classroom', 'attendanceRecord.child.organization', 'attendanceRecord.classroom', 'editedBy')
             ->whereIn('attendance_record_id', $ids)
             ->latest('edited_at')
             ->get()
@@ -886,7 +949,7 @@ class ApiController extends Controller
             ->get()
             ->map(function (AuditLog $log) {
                 $changes = $log->changes ?? [];
-                $child = isset($changes['child_id']) ? Child::with('classroom')->find($changes['child_id']) : null;
+                $child = isset($changes['child_id']) ? Child::with('classroom', 'organization')->find($changes['child_id']) : null;
                 $timezone = $log->organization_id ? $this->attendanceTimezone($log->organization_id) : 'Africa/Nairobi';
                 $editedAtLocal = $log->created_at ? $log->created_at->copy()->timezone($timezone) : null;
 
@@ -895,7 +958,7 @@ class ApiController extends Controller
                     'attendance_record_id' => null,
                     'childName' => $child ? trim($child->first_name.' '.$child->last_name) : 'Absence record',
                     'childCode' => $child?->child_code,
-                    'classroom' => $child?->classroom?->name,
+                    'classroom' => $child?->classroom?->name ?? (($child?->organization?->facility_type ?? 'center_daycare') === 'family_child_care' ? 'Family child care' : null),
                     'date' => $changes['absence_date'] ?? null,
                     'action' => $log->action,
                     'reason' => trim(($changes['absence_type'] ?? 'absence').' '.($changes['reason'] ?? '')),
@@ -1754,10 +1817,94 @@ class ApiController extends Controller
         return response()->json(['organizations' => Organization::withCount(['children', 'users as staff_count' => fn ($q) => $q->whereIn('role', ['staff', 'teacher', 'manager', 'daycare_admin'])])->get()->map(fn ($org) => $this->organizationPayload($org))]);
     }
 
+    public function platformRegistrationApplications(Request $request)
+    {
+        $status = $request->string('status')->toString();
+        $query = FacilityRegistrationApplication::with('pricingPlan', 'organization', 'reviewer')->latest();
+        if (in_array($status, ['pending', 'approved', 'rejected', 'follow_up'], true)) {
+            $query->where('status', $status);
+        }
+
+        return response()->json(['applications' => $query->get()->map(fn (FacilityRegistrationApplication $application) => $this->registrationApplicationPayload($application))]);
+    }
+
+    public function approveRegistrationApplication(Request $request, FacilityRegistrationApplication $application)
+    {
+        abort_if($application->status === 'approved' && $application->organization_id, 422, 'This application has already been approved.');
+        $data = $request->validate([
+            'pricing_plan_id' => ['nullable', 'exists:pricing_plans,id'],
+            'billing_cycle' => ['nullable', 'in:monthly,yearly'],
+            'review_notes' => ['nullable', 'string', 'max:3000'],
+        ]);
+
+        $created = DB::transaction(function () use ($request, $application, $data) {
+            $planId = $data['pricing_plan_id'] ?? $application->pricing_plan_id ?? PricingPlan::where('status', 'active')->orderBy('monthly_price')->value('id');
+            abort_unless($planId, 422, 'Create an active pricing plan before approving applications.');
+            $plan = PricingPlan::findOrFail($planId);
+            abort_if(
+                ($application->facility_type === 'family_child_care' && ! $plan->available_for_family_child_care)
+                || ($application->facility_type === 'center_daycare' && ! $plan->available_for_center_daycare),
+                422,
+                'The selected plan is not available for this facility type.'
+            );
+            $organization = $this->createOrganizationFromApplication($request, $application, $plan, $data['billing_cycle'] ?? $application->billing_cycle ?? 'monthly');
+            $application->update([
+                'status' => 'approved',
+                'review_notes' => $data['review_notes'] ?? $application->review_notes,
+                'pricing_plan_id' => $plan->id,
+                'billing_cycle' => $data['billing_cycle'] ?? $application->billing_cycle ?? 'monthly',
+                'organization_id' => $organization['organization']['id'],
+                'reviewed_by' => $request->user()?->id,
+                'reviewed_at' => now(),
+            ]);
+
+            $this->platformAudit($request, 'facility_application.approved', $application, [
+                'organization_id' => $organization['organization']['id'],
+                'facility_type' => $application->facility_type,
+            ]);
+
+            return [
+                'application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'organization', 'reviewer'])),
+                ...$organization,
+            ];
+        });
+
+        return response()->json($created, 201);
+    }
+
+    public function rejectRegistrationApplication(Request $request, FacilityRegistrationApplication $application)
+    {
+        $data = $request->validate(['review_notes' => ['nullable', 'string', 'max:3000']]);
+        $application->update([
+            'status' => 'rejected',
+            'review_notes' => $data['review_notes'] ?? null,
+            'reviewed_by' => $request->user()?->id,
+            'reviewed_at' => now(),
+        ]);
+        $this->platformAudit($request, 'facility_application.rejected', $application, ['review_notes' => $application->review_notes]);
+
+        return response()->json(['application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'organization', 'reviewer']))]);
+    }
+
+    public function requestRegistrationApplicationFollowUp(Request $request, FacilityRegistrationApplication $application)
+    {
+        $data = $request->validate(['review_notes' => ['required', 'string', 'max:3000']]);
+        $application->update([
+            'status' => 'follow_up',
+            'review_notes' => $data['review_notes'],
+            'reviewed_by' => $request->user()?->id,
+            'reviewed_at' => now(),
+        ]);
+        $this->platformAudit($request, 'facility_application.follow_up_requested', $application, ['review_notes' => $application->review_notes]);
+
+        return response()->json(['application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'organization', 'reviewer']))]);
+    }
+
     public function createOrganization(Request $request)
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'facility_type' => ['nullable', 'in:family_child_care,center_daycare'],
             'legal_name' => ['nullable', 'string', 'max:255'],
             'phone' => ['nullable', 'string', 'max:50'],
             'email' => ['nullable', 'email', 'max:255'],
@@ -1790,6 +1937,13 @@ class ApiController extends Controller
 
         $created = DB::transaction(function () use ($request, $data) {
             $plan = PricingPlan::findOrFail($data['pricing_plan_id']);
+            $facilityType = $data['facility_type'] ?? 'center_daycare';
+            abort_if(
+                ($facilityType === 'family_child_care' && ! $plan->available_for_family_child_care)
+                || ($facilityType === 'center_daycare' && ! $plan->available_for_center_daycare),
+                422,
+                'The selected plan is not available for this facility type.'
+            );
             $timezone = (! empty($data['timezone']) && in_array($data['timezone'], timezone_identifiers_list(), true))
                 ? $data['timezone']
                 : 'America/New_York';
@@ -1798,6 +1952,7 @@ class ApiController extends Controller
             $organization = Organization::create([
                 'name' => $data['name'],
                 'organization_code' => $this->generateOrganizationCode($data['name']),
+                'facility_type' => $facilityType,
                 'legal_name' => $data['legal_name'] ?? null,
                 'phone' => $data['phone'] ?? null,
                 'email' => $data['email'] ?? null,
@@ -2806,7 +2961,7 @@ class ApiController extends Controller
             $query->whereHas('guardians', fn ($q) => $q->whereIn('guardians.id', $guardianIds));
         }
 
-        if (in_array($user->role, $this->staffRoles, true)) {
+        if (in_array($user->role, $this->staffRoles, true) && ($user->organization?->facility_type ?? 'center_daycare') === 'center_daycare') {
             $query->where('classroom_id', $user->staffProfile?->classroom_id);
         }
 
@@ -2985,7 +3140,7 @@ class ApiController extends Controller
             'dateOfBirth' => optional($child->date_of_birth)->toDateString(),
             'date_of_birth' => optional($child->date_of_birth)->toDateString(),
             'age' => $child->date_of_birth ? $child->date_of_birth->age.' years' : 'Unknown',
-            'classroom' => $child->classroom?->name ?? 'Unassigned',
+            'classroom' => $child->classroom?->name ?? (($child->organization?->facility_type ?? 'center_daycare') === 'family_child_care' ? 'Family child care' : 'Unassigned'),
             'classroomId' => $child->classroom_id,
             'guardianNames' => $guardianNames,
             'primaryGuardianName' => $guardianNames->first(),
@@ -3045,7 +3200,7 @@ class ApiController extends Controller
             'childCode' => $record->child?->child_code,
             'child_code' => $record->child?->child_code,
             'childName' => trim($record->child?->first_name.' '.$record->child?->last_name),
-            'classroom' => $record->classroom?->name ?? $record->child?->classroom?->name ?? 'Unassigned',
+            'classroom' => $record->classroom?->name ?? $record->child?->classroom?->name ?? (($record->child?->organization?->facility_type ?? 'center_daycare') === 'family_child_care' ? 'Family child care' : 'Unassigned'),
             'date' => optional($record->date)->toDateString(),
             'timezone' => $timezone,
             'checkInAt' => optional($record->check_in_time)->toISOString(),
@@ -3137,7 +3292,9 @@ class ApiController extends Controller
             $query->whereHas('guardians', fn ($childGuardians) => $childGuardians->whereIn('guardians.id', $guardianIds));
         } elseif ($mode === 'staff') {
             abort_unless(in_array($user->role, $this->staffRoles, true), 403, 'Staff mode requires a staff or teacher account.');
-            $query->where('classroom_id', $user->staffProfile?->classroom_id);
+            if (($user->organization?->facility_type ?? 'center_daycare') === 'center_daycare') {
+                $query->where('classroom_id', $user->staffProfile?->classroom_id);
+            }
         } elseif ($mode === 'admin') {
             abort_unless(in_array($user->role, $this->managerRoles, true), 403, 'Admin mode requires a daycare admin or manager account.');
         }
@@ -3176,6 +3333,9 @@ class ApiController extends Controller
         if ($mode === 'staff') {
             return 'Staff Mode: assigned classroom only'.($user->staffProfile?->classroom?->name ? ' - '.$user->staffProfile->classroom->name : '');
         }
+        if (($user->organization?->facility_type ?? 'center_daycare') === 'family_child_care') {
+            return 'Admin Mode: all family child care children';
+        }
         return 'Admin Mode: all organization classrooms and children';
     }
 
@@ -3188,7 +3348,7 @@ class ApiController extends Controller
             'child_code' => $absence->child?->child_code,
             'childName' => $absence->child ? trim($absence->child->first_name.' '.$absence->child->last_name) : 'Child',
             'classroomId' => $absence->classroom_id,
-            'classroom' => $absence->classroom?->name ?? $absence->child?->classroom?->name ?? 'Unassigned',
+            'classroom' => $absence->classroom?->name ?? $absence->child?->classroom?->name ?? (($absence->child?->organization?->facility_type ?? 'center_daycare') === 'family_child_care' ? 'Family child care' : 'Unassigned'),
             'absenceDate' => optional($absence->absence_date)->toDateString(),
             'absence_date' => optional($absence->absence_date)->toDateString(),
             'absenceType' => $absence->absence_type,
@@ -3215,7 +3375,7 @@ class ApiController extends Controller
             'attendance_record_id' => $log->attendance_record_id,
             'childName' => $record?->child ? trim($record->child->first_name.' '.$record->child->last_name) : 'Attendance record',
             'childCode' => $record?->child?->child_code,
-            'classroom' => $record?->classroom?->name ?? $record?->child?->classroom?->name ?? 'Unassigned',
+            'classroom' => $record?->classroom?->name ?? $record?->child?->classroom?->name ?? (($record?->child?->organization?->facility_type ?? 'center_daycare') === 'family_child_care' ? 'Family child care' : 'Unassigned'),
             'date' => optional($record?->date)->toDateString(),
             'action' => $log->action,
             'reason' => $log->reason,
@@ -3335,6 +3495,8 @@ class ApiController extends Controller
             'features' => $plan->features ?? [],
             'status' => $plan->status ?? 'active',
             'featured' => (bool) ($plan->featured ?? false),
+            'available_for_family_child_care' => (bool) ($plan->available_for_family_child_care ?? true),
+            'available_for_center_daycare' => (bool) ($plan->available_for_center_daycare ?? true),
             'stripe_product_id' => $plan->stripe_product_id,
             'stripe_monthly_price_id' => $plan->stripe_monthly_price_id,
             'stripe_yearly_price_id' => $plan->stripe_yearly_price_id,
@@ -3434,6 +3596,101 @@ class ApiController extends Controller
         ];
     }
 
+    private function registrationApplicationPayload(FacilityRegistrationApplication $application): array
+    {
+        return [
+            'id' => (string) $application->id,
+            'facility_type' => $application->facility_type,
+            'facility_type_label' => Str::headline($application->facility_type),
+            'business_name' => $application->business_name,
+            'legal_name' => $application->legal_name,
+            'owner_name' => $application->owner_name,
+            'owner_email' => $application->owner_email,
+            'phone' => $application->phone,
+            'city' => $application->city,
+            'state' => $application->state,
+            'country' => $application->country,
+            'address' => $application->address,
+            'timezone' => $application->timezone,
+            'license_number' => $application->license_number,
+            'license_status' => $application->license_status,
+            'pricing_plan_id' => $application->pricing_plan_id,
+            'pricing_plan' => $application->pricingPlan ? $this->pricingPlanPayload($application->pricingPlan) : null,
+            'billing_cycle' => $application->billing_cycle,
+            'notes' => $application->notes,
+            'status' => $application->status,
+            'review_notes' => $application->review_notes,
+            'organization_id' => $application->organization_id,
+            'organization' => $application->organization ? $this->organizationPayload($application->organization) : null,
+            'reviewed_by' => $application->reviewed_by,
+            'reviewer_name' => $application->reviewer?->name,
+            'reviewed_at' => optional($application->reviewed_at)->toDateTimeString(),
+            'created_at' => optional($application->created_at)->toDateTimeString(),
+        ];
+    }
+
+    private function createOrganizationFromApplication(Request $request, FacilityRegistrationApplication $application, PricingPlan $plan, string $billingCycle): array
+    {
+        $timezone = ($application->timezone && in_array($application->timezone, timezone_identifiers_list(), true))
+            ? $application->timezone
+            : 'Africa/Nairobi';
+        $licenseNumber = trim((string) $application->license_number);
+        $licenseStatus = $licenseNumber === '' ? ($application->license_status ?: 'not_provided') : ($application->license_status ?: 'pending');
+
+        $organization = Organization::create([
+            'name' => $application->business_name,
+            'organization_code' => $this->generateOrganizationCode($application->business_name),
+            'facility_type' => $application->facility_type,
+            'legal_name' => $application->legal_name,
+            'phone' => $application->phone,
+            'email' => $application->owner_email,
+            'address' => $application->address,
+            'city' => $application->city,
+            'state' => $application->state,
+            'country' => $application->country,
+            'timezone' => $timezone,
+            'license_number' => $licenseNumber !== '' ? $licenseNumber : null,
+            'license_status' => $licenseStatus,
+            'status' => 'pending_setup',
+            'plan' => $plan->name,
+            'mrr' => 0,
+            'approved_at' => null,
+            'attendance_radius_meters' => 100,
+            'checkin_radius_meters' => 100,
+        ]);
+        $this->updateOrganizationTimezone($organization, $timezone);
+
+        $periodStart = now();
+        $periodEnd = $billingCycle === 'yearly' ? now()->addYear() : now()->addMonth();
+        $subscription = Subscription::create([
+            'organization_id' => $organization->id,
+            'pricing_plan_id' => $plan->id,
+            'billing_cycle' => $billingCycle,
+            'status' => 'pending_activation',
+            'provider' => 'manual',
+            'current_period_start' => $periodStart,
+            'current_period_end' => $periodEnd,
+            'current_period_ends_at' => $periodEnd,
+            'next_invoice_at' => $periodEnd,
+            'notes' => 'Created from public facility registration application.',
+        ]);
+
+        $invitation = $this->createOrganizationInvitation($request, $organization, [
+            'name' => $application->owner_name,
+            'email' => $application->owner_email,
+            'role' => 'daycare_admin',
+        ]);
+        $invoice = $this->ensureSubscriptionInvoice($subscription->fresh(['pricingPlan']));
+
+        return [
+            'organization' => $this->organizationPayload($organization->fresh()),
+            'subscription' => $this->subscriptionPayload($subscription->fresh(['organization', 'pricingPlan'])),
+            'invitations' => [$this->invitationPayload($invitation)],
+            'invoice' => $invoice ? $this->platformInvoicePayload($invoice->fresh(['organization', 'subscription.pricingPlan', 'payments'])) : null,
+            'invite_note' => 'Owner/admin invitation email has been queued for delivery.',
+        ];
+    }
+
     private function platformUserPayload(User $user): array
     {
         return [
@@ -3524,6 +3781,8 @@ class ApiController extends Controller
             'features' => ['sometimes', 'array'],
             'status' => ['sometimes', 'in:active,inactive'],
             'featured' => ['sometimes', 'boolean'],
+            'available_for_family_child_care' => ['sometimes', 'boolean'],
+            'available_for_center_daycare' => ['sometimes', 'boolean'],
             'stripe_product_id' => ['nullable', 'string', 'max:255'],
             'stripe_monthly_price_id' => ['nullable', 'string', 'max:255'],
             'stripe_yearly_price_id' => ['nullable', 'string', 'max:255'],
@@ -3882,6 +4141,9 @@ class ApiController extends Controller
             'name' => $org->name,
             'organization_code' => $org->organization_code,
             'organizationCode' => $org->organization_code,
+            'facility_type' => $org->facility_type ?? 'center_daycare',
+            'facilityType' => $org->facility_type ?? 'center_daycare',
+            'facility_type_label' => Str::headline($org->facility_type ?? 'center_daycare'),
             'legal_name' => $org->legal_name,
             'status' => $org->status,
             'licenseNumber' => $org->license_number,

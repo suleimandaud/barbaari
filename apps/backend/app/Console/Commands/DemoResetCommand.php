@@ -11,6 +11,7 @@ use App\Models\Classroom;
 use App\Models\Conversation;
 use App\Models\Device;
 use App\Models\Document;
+use App\Models\FacilityRegistrationApplication;
 use App\Models\Guardian;
 use App\Models\IncidentReport;
 use App\Models\Invoice;
@@ -63,6 +64,7 @@ class DemoResetCommand extends Command
             ]);
 
             PricingPlan::where('code', 'api-platform-test')->orWhere('name', 'API Platform Test')->delete();
+            FacilityRegistrationApplication::whereIn('owner_email', ['api-family-provider@example.test', 'staging-family-provider@example.test'])->delete();
             PricingPlan::updateOrCreate(
                 ['name' => 'Starter'],
                 [
@@ -77,6 +79,8 @@ class DemoResetCommand extends Command
                     'features' => ['attendance', 'guardian_signing', 'reports'],
                     'status' => 'active',
                     'featured' => false,
+                    'available_for_family_child_care' => true,
+                    'available_for_center_daycare' => true,
                 ]
             );
             $plan = PricingPlan::updateOrCreate(
@@ -93,6 +97,8 @@ class DemoResetCommand extends Command
                     'features' => ['attendance', 'tablet_mode', 'signatures', 'reports', 'notifications'],
                     'status' => 'active',
                     'featured' => true,
+                    'available_for_family_child_care' => true,
+                    'available_for_center_daycare' => true,
                 ]
             );
             PricingPlan::updateOrCreate(
@@ -109,6 +115,8 @@ class DemoResetCommand extends Command
                     'features' => ['multi_site', 'advanced_reports', 'priority_support'],
                     'status' => 'active',
                     'featured' => false,
+                    'available_for_family_child_care' => true,
+                    'available_for_center_daycare' => true,
                 ]
             );
 
@@ -119,6 +127,7 @@ class DemoResetCommand extends Command
                 [
                     'status' => 'active',
                     'organization_code' => 'LLD01',
+                    'facility_type' => 'center_daycare',
                     'license_number' => 'LLD-2026-001',
                     'license_status' => 'verified',
                     'city' => 'Minneapolis',

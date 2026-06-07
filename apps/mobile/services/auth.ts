@@ -54,8 +54,8 @@ export async function unlockTablet(mode: "guardian" | "staff" | "admin", email: 
   const response = await authApi.tabletUnlock({
     mode,
     email,
-    pin: mode === "guardian" ? undefined : credential,
-    password_or_pin: mode === "guardian" ? credential : undefined,
+    pin: mode === "staff" || (mode === "admin" && /^\d{4,8}$/.test(credential)) ? credential : undefined,
+    password_or_pin: mode === "guardian" || mode === "admin" ? credential : undefined,
     purpose: `tablet_${mode}`
   });
   await SecureStore.setItemAsync(TOKEN_KEY, response.token);

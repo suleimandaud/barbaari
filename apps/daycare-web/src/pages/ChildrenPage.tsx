@@ -1,6 +1,6 @@
 import type { FormEvent } from "react";
 import { useState } from "react";
-import { childrenApi, classroomsApi, guardiansApi, getApiError } from "@barbaari/shared";
+import { childrenApi, classroomsApi, guardiansApi, getApiError, organizationApi } from "@barbaari/shared";
 import { PageHeader, Panel } from "../components/Page";
 import { DataTable } from "../components/DataTable";
 import { Badge, ErrorState, LoadingState } from "../components/Status";
@@ -16,8 +16,8 @@ const emptyForm: ChildForm = { first_name: "", last_name: "", date_of_birth: "",
 
 export function ChildrenPage() {
   const { data, loading, error, reload } = useAsyncData(async () => {
-    const [children, classrooms, guardians] = await Promise.all([childrenApi.managerList(), classroomsApi.list(), guardiansApi.list()]);
-    return { children: children.children, classrooms: classrooms.classrooms, guardians: guardians.guardians };
+    const [children, classrooms, guardians, organization] = await Promise.all([childrenApi.managerList(), classroomsApi.list(), guardiansApi.list(), organizationApi.get()]);
+    return { children: children.children, classrooms: classrooms.classrooms, guardians: guardians.guardians, organization: organization.organization };
   }, []);
   const [form, setForm] = useState<ChildForm>(emptyForm);
   const [selectedChild, setSelectedChild] = useState<any | null>(null);
@@ -78,6 +78,7 @@ export function ChildrenPage() {
   const rows = data?.children ?? [];
   const classrooms = data?.classrooms ?? [];
   const guardians = data?.guardians ?? [];
+  const isFamilyChildCare = data?.organization?.facility_type === "family_child_care";
 
   return (
     <section className="page">
@@ -90,7 +91,7 @@ export function ChildrenPage() {
           <input value={form.first_name} onChange={(event) => setForm({ ...form, first_name: event.target.value })} placeholder="First name" required />
           <input value={form.last_name} onChange={(event) => setForm({ ...form, last_name: event.target.value })} placeholder="Last name" required />
           <input type="date" value={form.date_of_birth} onChange={(event) => setForm({ ...form, date_of_birth: event.target.value })} aria-label="Date of birth" />
-          <ClassroomSelect classrooms={classrooms} value={form.classroom_id} onChange={(id) => setForm({ ...form, classroom_id: id })} />
+          {!isFamilyChildCare ? <ClassroomSelect classrooms={classrooms} value={form.classroom_id} onChange={(id) => setForm({ ...form, classroom_id: id })} /> : <p className="muted">Family child care children are managed without classrooms.</p>}
           <button className="primary" disabled={saving}>{saving ? "Saving..." : "Create child"}</button>
         </form>
       </Panel>
@@ -100,9 +101,9 @@ export function ChildrenPage() {
           { header: "Child", render: (row: any) => <><strong>{row.name}</strong><br /><small>{childLabel(row)}</small></> },
           { header: "Child code", render: (row: any) => <Badge>{childCode(row)}</Badge> },
           { header: "DOB / age", render: (row: any) => <>{childDob(row)}<br /><small>{row.age}</small></> },
-          { header: "Classroom", render: (row: any) => row.classroom },
+          ...(!isFamilyChildCare ? [{ header: "Classroom", render: (row: any) => row.classroom }] : []),
           { header: "Guardians", render: (row: any) => row.guardianNames?.join(", ") || "Not linked" },
-          { header: "Actions", render: (row: any) => <div className="row-actions"><button className="action-link" onClick={() => openModal("view", row)}>View</button><button className="action-link" onClick={() => openModal("edit", row)}>Edit</button><button className="action-link" onClick={() => openModal("assign", row)}>Assign classroom</button><button className="action-link" onClick={() => openModal("guardian", row)}>Link guardian</button><button className="action-link" onClick={() => runAction(() => childrenApi.update(row.id, { status: "archived" }).then(() => undefined), `${row.name} archived.`)}>Archive</button></div> }
+          { header: "Actions", render: (row: any) => <div className="row-actions"><button className="action-link" onClick={() => openModal("view", row)}>View</button><button className="action-link" onClick={() => openModal("edit", row)}>Edit</button>{!isFamilyChildCare ? <button className="action-link" onClick={() => openModal("assign", row)}>Assign classroom</button> : null}<button className="action-link" onClick={() => openModal("guardian", row)}>Link guardian</button><button className="action-link" onClick={() => runAction(() => childrenApi.update(row.id, { status: "archived" }).then(() => undefined), `${row.name} archived.`)}>Archive</button></div> }
         ]} />
       )}
 
@@ -120,7 +121,7 @@ export function ChildrenPage() {
               <input value={form.first_name} onChange={(event) => setForm({ ...form, first_name: event.target.value })} placeholder="First name" required />
               <input value={form.last_name} onChange={(event) => setForm({ ...form, last_name: event.target.value })} placeholder="Last name" required />
               <input type="date" value={form.date_of_birth} onChange={(event) => setForm({ ...form, date_of_birth: event.target.value })} />
-              <ClassroomSelect classrooms={classrooms} value={form.classroom_id} onChange={(id) => setForm({ ...form, classroom_id: id })} />
+              {!isFamilyChildCare ? <ClassroomSelect classrooms={classrooms} value={form.classroom_id} onChange={(id) => setForm({ ...form, classroom_id: id })} /> : null}
               <button className="primary" disabled={saving}>{saving ? "Saving..." : "Save child"}</button>
             </form>
           ) : mode === "assign" ? (

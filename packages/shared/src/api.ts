@@ -2,7 +2,7 @@ import axios, { AxiosError } from "axios";
 
 const env = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
 
-export const API_BASE_URL = env.EXPO_PUBLIC_API_URL || env.VITE_API_URL || "http://127.0.0.1:8000/api";
+export const API_BASE_URL = env.EXPO_PUBLIC_API_URL || env.VITE_API_URL || "https://api-barbaari.pioneeriya.com/api";
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -83,6 +83,15 @@ export const invitationApi = {
   },
   accept(token: string, payload: { password: string; password_confirmation: string }) {
     return data<{ message: string; user: any }>(api.post(`/invitations/${token}/accept`, payload));
+  }
+};
+
+export const registrationApi = {
+  pricingPlans(facility_type?: "family_child_care" | "center_daycare") {
+    return data<ListResponse<any, "pricing_plans">>(api.get("/public/pricing-plans", { params: facility_type ? { facility_type } : undefined }));
+  },
+  createApplication(payload: Record<string, unknown>) {
+    return data<{ application: any; message: string }>(api.post("/registration-applications", payload));
   }
 };
 
@@ -455,6 +464,18 @@ export const superAdminApi = {
   },
   organizations() {
     return data<ListResponse<any, "organizations">>(api.get("/platform/organizations"));
+  },
+  registrationApplications(params?: Record<string, unknown>) {
+    return data<ListResponse<any, "applications">>(api.get("/platform/registration-applications", { params }));
+  },
+  approveRegistrationApplication(id: string | number, payload?: Record<string, unknown>) {
+    return data<{ application: any; organization: any; subscription?: any; invitations?: any[]; invoice?: any }>(api.post(`/platform/registration-applications/${id}/approve`, payload ?? {}));
+  },
+  rejectRegistrationApplication(id: string | number, review_notes?: string) {
+    return data<{ application: any }>(api.post(`/platform/registration-applications/${id}/reject`, { review_notes }));
+  },
+  requestRegistrationApplicationFollowUp(id: string | number, review_notes: string) {
+    return data<{ application: any }>(api.post(`/platform/registration-applications/${id}/follow-up`, { review_notes }));
   },
   createOrganization(payload: Record<string, unknown>) {
     return data<{ organization: any; subscription?: any; invitations?: any[]; invoice?: any; demo_invite_note?: string }>(api.post("/platform/organizations", payload));

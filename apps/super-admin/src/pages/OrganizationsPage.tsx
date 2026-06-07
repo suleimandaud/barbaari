@@ -33,6 +33,7 @@ const TIMEZONES: TzOption[] = [
 
 const emptyForm = {
   name: "",
+  facility_type: "center_daycare",
   legal_name: "",
   phone: "",
   email: "",
@@ -133,7 +134,7 @@ export function OrganizationsPage() {
 
       {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : (
         <DataTable rows={data?.organizations ?? []} columns={[
-          { header: "Organization", render: (row: any) => <><strong>{row.name}</strong><br /><small>{row.city ?? "No city"}{row.state ? `, ${row.state}` : ""}</small></> },
+          { header: "Organization", render: (row: any) => <><strong>{row.name}</strong><br /><small>{row.city ?? "No city"}{row.state ? `, ${row.state}` : ""}</small><br /><Badge>{titleize(row.facility_type ?? "center_daycare")}</Badge></> },
           { header: "Status", render: (row: any) => <Badge tone={row.status}>{titleize(row.status)}</Badge> },
           { header: "License", render: (row: any) => <><span>{row.licenseNumber ?? row.license_number ?? "Optional"}</span><br /><Badge tone={row.license_status === "verified" ? "success" : row.license_status === "rejected" ? "danger" : "warning"}>{titleize(row.license_status ?? "not_provided")}</Badge></> },
           { header: "Admin / Users", render: (row: any) => <><strong>{row.primary_admin_email ?? "No admin"}</strong><br /><small>{row.users_count ?? row.staff ?? 0} login users</small></> },
@@ -185,6 +186,7 @@ export function OrganizationsPage() {
           <div className="record-tabs stepper-tabs">{steps.map((label, index) => <button key={label} className={step === index ? "active" : ""} onClick={() => setStep(index)}><span>{index + 1}.</span> {label}</button>)}</div>
           {step === 0 ? <div className="form-grid two">
             <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Daycare name" required />
+            <select value={form.facility_type} onChange={(event) => setForm({ ...form, facility_type: event.target.value, pricing_plan_id: "" })}><option value="center_daycare">Center Daycare</option><option value="family_child_care">Family Child Care</option></select>
             <input value={form.legal_name} onChange={(event) => setForm({ ...form, legal_name: event.target.value })} placeholder="Legal/business name optional" />
             <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="Phone" />
             <input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="Organization email" />
@@ -206,7 +208,7 @@ export function OrganizationsPage() {
           {step === 1 ? <div className="form-grid two">
             <select value={form.pricing_plan_id} onChange={(event) => setForm({ ...form, pricing_plan_id: event.target.value })}>
               <option value="">Choose pricing plan</option>
-              {(data?.plans ?? []).map((plan: any) => <option key={plan.id} value={plan.id}>{plan.name} - ${Number(plan.monthly_price).toFixed(0)}/month</option>)}
+              {(data?.plans ?? []).filter((plan: any) => form.facility_type === "family_child_care" ? plan.available_for_family_child_care : plan.available_for_center_daycare).map((plan: any) => <option key={plan.id} value={plan.id}>{plan.name} - ${Number(plan.monthly_price).toFixed(0)}/month</option>)}
             </select>
             <select value={form.billing_cycle} onChange={(event) => setForm({ ...form, billing_cycle: event.target.value })}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
             <input type="number" value={form.trial_days} onChange={(event) => setForm({ ...form, trial_days: event.target.value })} placeholder="Trial days optional" />
@@ -233,6 +235,7 @@ export function OrganizationsPage() {
           {step === 3 ? <div className="settings-stack">
             <Panel title="Review">
               <p><strong>{form.name || "Unnamed daycare"}</strong> in {form.city || "No city"} / {form.country || "No country"}</p>
+              <p>Facility type: {titleize(form.facility_type)}</p>
               <p>License: {form.license_number || "Not provided"} ({titleize(form.license_status)})</p>
               <p>Plan: {selectedPlan()?.name ?? "No plan selected"} / {titleize(form.billing_cycle)}</p>
               <p>Primary admin invite: {form.primary_admin.name} - {form.primary_admin.email}</p>

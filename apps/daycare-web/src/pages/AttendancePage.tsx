@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { absenceApi, attendanceApi, authApi, childrenApi, classroomsApi, formatAttendanceTime, getApiError } from "@barbaari/shared";
+import { absenceApi, attendanceApi, authApi, childrenApi, classroomsApi, formatAttendanceTime, getApiError, organizationApi } from "@barbaari/shared";
 import { PageHeader, Panel } from "../components/Page";
 import { DataTable } from "../components/DataTable";
 import { Badge, ErrorState, LoadingState } from "../components/Status";
@@ -62,14 +62,15 @@ function browserLocation(): Promise<{ latitude: number; longitude: number }> {
 export function AttendancePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { data, loading, error, reload } = useAsyncData(async () => {
-    const [attendance, absences, children, classrooms, auditLogs] = await Promise.all([
+    const [attendance, absences, children, classrooms, auditLogs, organization] = await Promise.all([
       attendanceApi.managerList(),
       absenceApi.list(),
       childrenApi.managerList(),
       classroomsApi.list(),
-      attendanceApi.auditLogs()
+      attendanceApi.auditLogs(),
+      organizationApi.get()
     ]);
-    return { attendance: attendance.attendance, absences: absences.absence_records, children: children.children, classrooms: classrooms.classrooms, auditLogs: auditLogs.audit_logs };
+    return { attendance: attendance.attendance, absences: absences.absence_records, children: children.children, classrooms: classrooms.classrooms, auditLogs: auditLogs.audit_logs, organization: organization.organization };
   }, []);
   const today = new Date().toISOString().slice(0, 10);
   const nowForInput = useMemo(() => new Date().toISOString().slice(0, 16), []);
@@ -120,6 +121,7 @@ export function AttendancePage() {
 
   const childById = useMemo(() => new Map((data?.children ?? []).map((child: any) => [String(child.id), child])), [data?.children]);
   const classroomByName = useMemo(() => new Map((data?.classrooms ?? []).map((room: any) => [room.name, room])), [data?.classrooms]);
+  const isFamilyChildCare = data?.organization?.facility_type === "family_child_care";
   const actionChildren = useMemo(() => {
     return actionClassroomId ? (data?.children ?? []).filter((child: any) => String(child.classroomId) === actionClassroomId) : data?.children ?? [];
   }, [actionClassroomId, data?.children]);
@@ -333,7 +335,7 @@ export function AttendancePage() {
 
   async function openKioskMode() {
     setKioskOpen(true);
-    setKioskStep(1);
+    setKioskStep(isFamilyChildCare ? 2 : 1);
     setKioskClassroomId("");
     setKioskChildId("");
     setKioskAction("in");
@@ -550,7 +552,7 @@ export function AttendancePage() {
 
   return (
     <section className="page">
-      <PageHeader eyebrow="Compliance core" title="Attendance Operations" description="Manage live check-ins, tablet/kiosk mode, absences, early checkouts, missing checkouts, and attendance records in one workspace." action={<button className="primary" onClick={openKioskMode}>Open tablet / kiosk mode</button>} />
+      <PageHeader eyebrow="Compliance core" title="Attendance Operations" description={isFamilyChildCare ? "Manage child-based check-ins, check-outs, absences, signatures, geofence verification, and attendance records in one workspace." : "Manage live check-ins, tablet/kiosk mode, absences, early checkouts, missing checkouts, and attendance records in one workspace."} action={<button className="primary" onClick={openKioskMode}>Open tablet / kiosk mode</button>} />
       <SuccessAlert message={success} />
       <ErrorAlert message={actionError} />
 
@@ -583,15 +585,15 @@ export function AttendancePage() {
       {activeTab === "kiosk" ? <Panel title="Kiosk / Tablet">
         <div className="compliance-strip">
           <article><strong>Parent / Guardian</strong><span>Linked children only, drawn signature for check-in/out.</span></article>
-          <article><strong>Staff</strong><span>Assigned classroom only with staff PIN unlock.</span></article>
-          <article><strong>Admin</strong><span>All classrooms and children for full attendance operations.</span></article>
+          <article><strong>Staff</strong><span>{isFamilyChildCare ? "Provider/staff attendance support for visible children." : "Assigned classroom only with staff PIN unlock."}</span></article>
+          <article><strong>Admin</strong><span>{isFamilyChildCare ? "All children for family child care attendance operations." : "All classrooms and children for full attendance operations."}</span></article>
         </div>
         <div className="attendance-buttons"><button className="primary" onClick={openKioskMode}>Open Tablet / Kiosk Mode</button><button className="secondary" onClick={() => location.href = "/devices"}>View device status</button></div>
       </Panel> : null}
 
       {["records", "absences", "early", "missing", "corrections"].includes(activeTab) ? <Panel title="Attendance Actions">
         <div className="form-grid attendance-grid">
-          <ClassroomSelect classrooms={data?.classrooms ?? []} value={actionClassroomId} onChange={(id) => { setActionClassroomId(id); setActionChildId(""); }} />
+          {!isFamilyChildCare ? <ClassroomSelect classrooms={data?.classrooms ?? []} value={actionClassroomId} onChange={(id) => { setActionClassroomId(id); setActionChildId(""); }} /> : null}
           <ChildSelect children={actionChildren} value={actionChildId} onChange={setActionChildId} />
           <label className="field-stack"><span>Date</span><input type="date" value={actionDate} onChange={(event) => setActionDate(event.target.value)} /></label>
           <div className="attendance-buttons">
@@ -604,7 +606,7 @@ export function AttendancePage() {
 
       {activeTab === "absences" ? <Panel title="Absence Tracking">
         <div className="form-grid attendance-grid">
-          <ClassroomSelect classrooms={data?.classrooms ?? []} value={actionClassroomId} onChange={(id) => { setActionClassroomId(id); setActionChildId(""); }} label="Classroom" />
+          {!isFamilyChildCare ? <ClassroomSelect classrooms={data?.classrooms ?? []} value={actionClassroomId} onChange={(id) => { setActionClassroomId(id); setActionChildId(""); }} label="Classroom" /> : null}
           <ChildSelect children={actionChildren} value={actionChildId} onChange={setActionChildId} label="Absent child" />
           <label className="field-stack"><span>Absence date</span><input type="date" value={actionDate} onChange={(event) => setActionDate(event.target.value)} /></label>
           <label className="field-stack"><span>Absence type</span><select value={absenceType} onChange={(event) => setAbsenceType(event.target.value)}>
@@ -630,7 +632,7 @@ export function AttendancePage() {
         </div>
         <div className="form-grid attendance-grid">
           <label className="field-stack"><span>Date filter</span><input type="date" value={filterDate} onChange={(event) => setFilterDate(event.target.value)} /></label>
-          <ClassroomSelect classrooms={data?.classrooms ?? []} value={filterClassroomId} onChange={setFilterClassroomId} label="Classroom filter" />
+          {!isFamilyChildCare ? <ClassroomSelect classrooms={data?.classrooms ?? []} value={filterClassroomId} onChange={setFilterClassroomId} label="Classroom filter" /> : null}
           <ChildSelect children={data?.children ?? []} value={filterChildId} onChange={setFilterChildId} label="Child search" />
           <label className="field-stack"><span>Status filter</span><select value={status} onChange={(event) => setStatus(event.target.value)}>
             <option value="">All statuses</option>
@@ -661,7 +663,7 @@ export function AttendancePage() {
               return <><strong>{row.childName}</strong><br /><small>{child ? childLabel(child) : `ID: ${row.childCode ?? "No child code"}`}</small></>;
             } },
             { header: "Child code", render: (row: any) => <Badge>{row.childCode ?? row.child_code ?? "Uncoded"}</Badge> },
-            { header: "Classroom", render: (row: any) => row.classroom },
+            ...(!isFamilyChildCare ? [{ header: "Classroom", render: (row: any) => row.classroom }] : []),
             { header: "Date", render: (row: any) => row.date },
             { header: "Check-in", render: (row: any) => row.checkInTime ?? "Not recorded" },
             { header: "Check-out", render: (row: any) => row.checkOutTime ?? "Pending" },
@@ -684,7 +686,7 @@ export function AttendancePage() {
               return <><strong>{row.childName}</strong><br /><small>{child ? childLabel(child) : `ID: ${row.childCode ?? "No child code"}`}</small></>;
             } },
             { header: "Child code", render: (row: any) => <Badge>{row.childCode ?? row.child_code ?? "Uncoded"}</Badge> },
-            { header: "Classroom", render: (row: any) => row.classroom },
+            ...(!isFamilyChildCare ? [{ header: "Classroom", render: (row: any) => row.classroom }] : []),
             { header: "Date", render: (row: any) => row.absenceDate ?? row.absence_date },
             { header: "Type", render: (row: any) => <Badge tone={row.absenceType === "no_show" || row.absence_type === "no_show" ? "warning" : "neutral"}>{absenceLabel(row.absenceType ?? row.absence_type ?? "")}</Badge> },
             { header: "Reason", render: (row: any) => row.reason ?? "No reason entered" },
@@ -755,14 +757,14 @@ export function AttendancePage() {
               <button className="secondary" onClick={() => setKioskOpen(false)}>Exit kiosk</button>
             </header>
             <div className="kiosk-progress">
-              {["Classroom", "Child", "Action", "Signer", "Verify", "Signature", "Done"].map((label, index) => <span key={label} className={kioskStep >= index + 1 ? "active" : ""}>{label}</span>)}
+              {(isFamilyChildCare ? ["Child", "Action", "Signer", "Verify", "Signature", "Done"] : ["Classroom", "Child", "Action", "Signer", "Verify", "Signature", "Done"]).map((label, index) => <span key={label} className={kioskStep >= index + (isFamilyChildCare ? 2 : 1) ? "active" : ""}>{label}</span>)}
             </div>
             <ErrorAlert message={actionError} />
             <SuccessAlert message={kioskSuccess} />
 
-            {kioskStep === 1 ? <section className="kiosk-card"><h2>Select classroom</h2><div className="kiosk-choice-grid">{(data?.classrooms ?? []).map((room: any) => <button key={room.id} className={String(room.id) === kioskClassroomId ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => { setKioskClassroomId(String(room.id)); setKioskChildId(""); }}>{room.name}<small>Capacity {room.capacity ?? "n/a"}</small></button>)}</div><button className="primary" disabled={!kioskClassroomId} onClick={() => setKioskStep(2)}>Continue</button></section> : null}
+            {!isFamilyChildCare && kioskStep === 1 ? <section className="kiosk-card"><h2>Select classroom</h2><div className="kiosk-choice-grid">{(data?.classrooms ?? []).map((room: any) => <button key={room.id} className={String(room.id) === kioskClassroomId ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => { setKioskClassroomId(String(room.id)); setKioskChildId(""); }}>{room.name}<small>Capacity {room.capacity ?? "n/a"}</small></button>)}</div><button className="primary" disabled={!kioskClassroomId} onClick={() => setKioskStep(2)}>Continue</button></section> : null}
 
-            {kioskStep === 2 ? <section className="kiosk-card"><h2>Select child</h2><div className="kiosk-choice-grid children">{kioskChildren.map((child: any) => <button key={child.id} className={String(child.id) === kioskChildId ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => setKioskChildId(String(child.id))}>{child.name}<small>{child.classroom} - ID: {child.childCode ?? child.child_code}</small></button>)}</div><div className="kiosk-actions"><button className="secondary" onClick={() => setKioskStep(1)}>Back</button><button className="primary" disabled={!kioskChildId} onClick={() => setKioskStep(3)}>Continue</button></div></section> : null}
+            {kioskStep === 2 ? <section className="kiosk-card"><h2>Select child</h2><div className="kiosk-choice-grid children">{kioskChildren.map((child: any) => <button key={child.id} className={String(child.id) === kioskChildId ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => setKioskChildId(String(child.id))}>{child.name}<small>{isFamilyChildCare ? "Family child care" : child.classroom} - ID: {child.childCode ?? child.child_code}</small></button>)}</div><div className="kiosk-actions">{!isFamilyChildCare ? <button className="secondary" onClick={() => setKioskStep(1)}>Back</button> : null}<button className="primary" disabled={!kioskChildId} onClick={() => setKioskStep(3)}>Continue</button></div></section> : null}
 
             {kioskStep === 3 ? <section className="kiosk-card"><h2>Choose action</h2><div className="kiosk-choice-grid">{[{ id: "in", label: "Check in" }, { id: "out", label: "Check out" }, { id: "absent", label: "Mark absent" }].map((action) => <button key={action.id} className={kioskAction === action.id ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => setKioskAction(action.id as "in" | "out" | "absent")}>{action.label}</button>)}</div><div className="kiosk-actions"><button className="secondary" onClick={() => setKioskStep(2)}>Back</button><button className="primary" onClick={continueFromKioskAction}>Continue</button></div></section> : null}
 

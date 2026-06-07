@@ -202,9 +202,12 @@ class AuthController extends Controller
             if (! in_array($user->role, ['daycare_admin', 'manager'], true)) {
                 return response()->json(['message' => 'Only daycare admin or manager accounts can unlock admin mode.'], 403);
             }
-            if (! $user->pin_hash || ! Hash::check($data['pin'] ?? '', $user->pin_hash)) {
-                $this->pinLog($request, $user, false, $data['purpose'] ?? 'tablet_admin', $user->pin_hash ? 'invalid_pin' : 'pin_not_set');
-                throw ValidationException::withMessages(['pin' => ['Incorrect admin/manager PIN.']]);
+            $credential = $data['password_or_pin'] ?? $data['pin'] ?? null;
+            $passwordOk = $credential && Hash::check($credential, $user->password);
+            $pinOk = $credential && $user->pin_hash && Hash::check($credential, $user->pin_hash);
+            if (! $passwordOk && ! $pinOk) {
+                $this->pinLog($request, $user, false, $data['purpose'] ?? 'tablet_admin', $user->pin_hash ? 'invalid_admin_credential' : 'pin_not_set');
+                throw ValidationException::withMessages(['pin' => [$user->pin_hash ? 'Incorrect admin/manager PIN or password.' : 'Use the admin password, or reset an admin/manager tablet PIN from Staff Access.']]);
             }
         }
 
@@ -488,6 +491,9 @@ class AuthController extends Controller
             $childQuery->whereHas('guardians', fn ($query) => $query->whereIn('guardians.id', $guardianIds));
         } elseif ($mode === 'staff') {
             $childQuery->where('classroom_id', $user->staffProfile?->classroom_id);
+            if (($user->organization?->facility_type ?? 'center_daycare') === 'family_child_care') {
+                $childQuery = \App\Models\Child::query()->where('organization_id', $user->organization_id);
+            }
         }
 
         $children = $childQuery->get(['id', 'classroom_id']);

@@ -12,6 +12,7 @@ use App\Models\PinVerificationLog;
 use App\Models\Guardian;
 use App\Models\Role;
 use App\Models\StaffProfile;
+use App\Services\SubscriptionAccessService;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -143,6 +144,20 @@ class AuthController extends Controller
 
         if ($user->role === 'super_admin') {
             return response()->json(['message' => 'Super admin cannot unlock daily attendance tablet mode.'], 403);
+        }
+        if (! $user->organization_id || ! $user->organization) {
+            return response()->json(['message' => 'This account is not linked to an active provider organization.'], 403);
+        }
+        if ($user->organization->status !== 'active') {
+            return response()->json(['message' => 'This organization is not subscribed/active. Please contact the administrator.'], 402);
+        }
+        $subscriptionGate = app(SubscriptionAccessService::class)->getPaymentGateReason((int) $user->organization_id);
+        if ($subscriptionGate['requires_payment']) {
+            return response()->json([
+                'message' => 'This organization is not subscribed/active. Please contact the administrator.',
+                'requires_payment' => true,
+                'subscription_status' => $subscriptionGate['subscription_status'],
+            ], 402);
         }
         $mode = $data['mode'];
         if ($mode === 'guardian') {

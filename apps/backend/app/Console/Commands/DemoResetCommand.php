@@ -97,7 +97,7 @@ class DemoResetCommand extends Command
                     'features' => ['attendance', 'tablet_mode', 'signatures', 'reports', 'notifications'],
                     'status' => 'active',
                     'featured' => true,
-                    'available_for_family_child_care' => true,
+                    'available_for_family_child_care' => false,
                     'available_for_center_daycare' => true,
                 ]
             );
@@ -115,7 +115,7 @@ class DemoResetCommand extends Command
                     'features' => ['multi_site', 'advanced_reports', 'priority_support'],
                     'status' => 'active',
                     'featured' => false,
-                    'available_for_family_child_care' => true,
+                    'available_for_family_child_care' => false,
                     'available_for_center_daycare' => true,
                 ]
             );

@@ -15,6 +15,13 @@ function statusTone(status?: string) {
   return "warning";
 }
 
+function isPlanAllowedForFacility(plan: any, facilityType: string) {
+  if (facilityType === "family_child_care") {
+    return plan.available_for_family_child_care && (String(plan.code ?? "").toLowerCase() === "starter" || String(plan.name ?? "").toLowerCase() === "starter");
+  }
+  return plan.available_for_center_daycare;
+}
+
 export function RegistrationApplicationsPage() {
   const { data, loading, error, reload } = useAsyncData(async () => {
     const [applications, plans] = await Promise.all([superAdminApi.registrationApplications(), superAdminApi.pricingPlans()]);
@@ -27,14 +34,16 @@ export function RegistrationApplicationsPage() {
   const [success, setSuccess] = useState("");
   const [actionError, setActionError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [approvalResult, setApprovalResult] = useState<any | null>(null);
 
   function open(application: any) {
     setSelected(application);
-    setPlanId(application.pricing_plan_id ?? data?.plans?.find((plan: any) => plan.available_for_family_child_care || plan.available_for_center_daycare)?.id ?? "");
+    setPlanId(application.pricing_plan_id ?? data?.plans?.find((plan: any) => isPlanAllowedForFacility(plan, application.facility_type))?.id ?? "");
     setBillingCycle(application.billing_cycle ?? "monthly");
     setReviewNotes(application.review_notes ?? "");
     setSuccess("");
     setActionError("");
+    setApprovalResult(null);
   }
 
   async function action(fn: () => Promise<unknown>, message: string) {
@@ -44,6 +53,24 @@ export function RegistrationApplicationsPage() {
     try {
       await fn();
       setSuccess(message);
+      setSelected(null);
+      await reload();
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function approveSelected() {
+    if (!selected) return;
+    setSaving(true);
+    setActionError("");
+    setSuccess("");
+    try {
+      const response = await superAdminApi.approveRegistrationApplication(selected.id, { pricing_plan_id: planId, billing_cycle: billingCycle, review_notes: reviewNotes || undefined });
+      setApprovalResult(response);
+      setSuccess("Application approved, organization created, and owner invite queued.");
       setSelected(null);
       await reload();
     } catch (err) {
@@ -72,7 +99,7 @@ export function RegistrationApplicationsPage() {
         <DataTable rows={rows} columns={[
           { header: "Provider", render: (row: any) => <><strong>{row.business_name}</strong><br /><small>{row.owner_name} - {row.owner_email}</small></> },
           { header: "Facility type", render: (row: any) => <Badge>{facilityLabel(row.facility_type)}</Badge> },
-          { header: "Location", render: (row: any) => [row.city, row.state, row.country].filter(Boolean).join(", ") || "Not provided" },
+          { header: "Location", render: (row: any) => <>{[row.city, row.state, row.country].filter(Boolean).join(", ") || "Not provided"}{row.facility_type === "family_child_care" ? <><br /><small>{row.latitude && row.longitude ? `${row.latitude}, ${row.longitude}` : "Home location not provided"}</small></> : null}</> },
           { header: "Plan", render: (row: any) => <><strong>{row.pricing_plan?.name ?? "Needs plan"}</strong><br /><small>{row.pricing_plan ? money(row.pricing_plan.monthly_price) : "No price"} / {row.billing_cycle}</small></> },
           { header: "Status", render: (row: any) => <Badge tone={statusTone(row.status)}>{titleize(row.status)}</Badge> },
           { header: "Submitted", render: (row: any) => row.created_at ? new Date(row.created_at).toLocaleDateString() : "—" },
@@ -89,6 +116,12 @@ export function RegistrationApplicationsPage() {
                 <article className="ops"><span>Owner</span><strong>{selected.owner_name}</strong></article>
                 <article className="ops"><span>Email</span><strong>{selected.owner_email}</strong></article>
                 <article className="ops"><span>Phone</span><strong>{selected.phone ?? "—"}</strong></article>
+                <article className="ops"><span>Location</span><strong>{[selected.city, selected.state, selected.country].filter(Boolean).join(", ") || "—"}</strong></article>
+                {selected.facility_type === "family_child_care" ? <>
+                  <article className="ops"><span>Latitude</span><strong>{selected.latitude ?? "Not provided"}</strong></article>
+                  <article className="ops"><span>Longitude</span><strong>{selected.longitude ?? "Not provided"}</strong></article>
+                  <article className="ops"><span>Radius</span><strong>{selected.attendance_radius_meters ?? 100} meters</strong></article>
+                </> : null}
                 <article className="ops"><span>License</span><strong>{selected.license_number ?? "Not provided"}</strong></article>
                 <article className="ops"><span>Status</span><strong>{titleize(selected.status)}</strong></article>
               </div>
@@ -97,17 +130,39 @@ export function RegistrationApplicationsPage() {
             <Panel title="Approval settings">
               <div className="form-grid two">
                 <select value={planId} onChange={(event) => setPlanId(event.target.value)}>
-                  {(data?.plans ?? []).filter((plan: any) => selected.facility_type === "family_child_care" ? plan.available_for_family_child_care : plan.available_for_center_daycare).map((plan: any) => <option key={plan.id} value={plan.id}>{plan.name} - {money(plan.monthly_price)}/month</option>)}
+                  {(data?.plans ?? []).filter((plan: any) => isPlanAllowedForFacility(plan, selected.facility_type)).map((plan: any) => <option key={plan.id} value={plan.id}>{plan.name} - {money(plan.monthly_price)}/month</option>)}
                 </select>
                 <select value={billingCycle} onChange={(event) => setBillingCycle(event.target.value)}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
                 <textarea className="full" value={reviewNotes} onChange={(event) => setReviewNotes(event.target.value)} placeholder="Review notes or follow-up request" rows={4} />
               </div>
             </Panel>
             <div className="actions">
-              <button className="primary" disabled={saving || !planId || selected.status === "approved"} onClick={() => action(() => superAdminApi.approveRegistrationApplication(selected.id, { pricing_plan_id: planId, billing_cycle: billingCycle, review_notes: reviewNotes || undefined }), "Application approved and organization created.")}>Approve / Convert</button>
+              <button className="primary" disabled={saving || !planId || selected.status === "approved"} onClick={approveSelected}>Approve / Convert</button>
               <button className="secondary" disabled={saving} onClick={() => action(() => superAdminApi.requestRegistrationApplicationFollowUp(selected.id, reviewNotes || "Please provide more information."), "Follow-up requested.")}>Request follow-up</button>
               <button className="secondary" disabled={saving} onClick={() => action(() => superAdminApi.rejectRegistrationApplication(selected.id, reviewNotes || "Application rejected."), "Application rejected.")}>Reject</button>
             </div>
+          </div>
+        </Modal>
+      ) : null}
+      {approvalResult ? (
+        <Modal title="Application approved" onClose={() => setApprovalResult(null)}>
+          <div className="settings-stack">
+            <Panel title="Created organization">
+              <p><strong>{approvalResult.organization?.name}</strong> is ready for owner setup.</p>
+              <Badge tone="warning">{titleize(approvalResult.subscription?.status ?? "pending_activation")}</Badge>
+              <p className="muted">{approvalResult.invite_note ?? "Owner invitation email has been queued."}</p>
+            </Panel>
+            <Panel title="Manual staging invite link">
+              {(approvalResult.invitations ?? []).map((invite: any) => <div className="log" key={invite.id}>
+                <strong>{invite.name} - {invite.email}</strong>
+                <span>Copy this only if email delivery is not available in staging.</span>
+                <div className="invite-link-row">
+                  <input readOnly value={invite.invite_url} onFocus={(event) => event.currentTarget.select()} />
+                  <button className="secondary" onClick={() => navigator.clipboard?.writeText(invite.invite_url)}>Copy invite link</button>
+                </div>
+                <a className="truncate" href={invite.invite_url} target="_blank" rel="noopener noreferrer">{invite.invite_url}</a>
+              </div>)}
+            </Panel>
           </div>
         </Modal>
       ) : null}

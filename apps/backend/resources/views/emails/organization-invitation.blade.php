@@ -31,13 +31,14 @@
   <div class="body">
     <p>Hi {{ $recipientName }},</p>
     <p>You have been invited to join <strong>{{ $organizationName }}</strong> on Barbaari as a <strong>{{ $role }}</strong>.</p>
-    <p>Click the button below to create your password and activate your account.</p>
+    <p>Create your password to continue setup. After login, Barbaari will guide you through subscription payment if it is still pending.</p>
     <div class="info-box">
       <p><strong>Organization:</strong> {{ $organizationName }}</p>
+      <p><strong>Facility type:</strong> {{ $facilityType }}</p>
       <p><strong>Role:</strong> {{ $role }}</p>
       <p><strong>This invitation expires in 14 days.</strong></p>
     </div>
-    <a href="{{ $inviteUrl }}" class="btn">Accept Invitation &amp; Set Password</a>
+    <a href="{{ $inviteUrl }}" class="btn">Create Password &amp; Continue Setup</a>
     <p class="url-fallback">If the button does not work, copy and paste this link into your browser:<br>{{ $inviteUrl }}</p>
   </div>
   <div class="footer">

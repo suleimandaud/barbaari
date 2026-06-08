@@ -55,6 +55,13 @@ const emptyForm = {
 const steps = ["Organization Details", "Plan", "Admin Users", "Review"];
 const userRoles = ["daycare_admin", "manager", "billing_manager", "teacher", "staff"];
 
+function isPlanAllowedForFacility(plan: any, facilityType: string) {
+  if (facilityType === "family_child_care") {
+    return plan.available_for_family_child_care && (String(plan.code ?? "").toLowerCase() === "starter" || String(plan.name ?? "").toLowerCase() === "starter");
+  }
+  return plan.available_for_center_daycare;
+}
+
 export function OrganizationsPage() {
   const navigate = useNavigate();
   const { data, loading, error, reload } = useAsyncData(async () => {
@@ -128,7 +135,7 @@ export function OrganizationsPage() {
 
   return (
     <section className="page">
-      <Header eyebrow="Tenant control" title="Organizations" action={<button className="primary" onClick={() => { setForm({ ...emptyForm, pricing_plan_id: data?.plans?.[0]?.id ?? "" }); setCreatedResult(null); setCreating(true); }}>Onboard Organization</button>} />
+      <Header eyebrow="Tenant control" title="Organizations" action={<div className="row-actions"><button className="primary" onClick={() => navigate("/registration-applications")}>Review applications</button><button className="secondary" onClick={() => { setForm({ ...emptyForm, pricing_plan_id: data?.plans?.[0]?.id ?? "" }); setCreatedResult(null); setCreating(true); }}>Internal support only</button></div>} />
       <Alert message={success} />
       <Alert message={actionError} tone="danger" />
 
@@ -162,7 +169,7 @@ export function OrganizationsPage() {
         </Modal>
       ) : null}
       {creating ? (
-        <Modal title="Onboard daycare organization" onClose={() => setCreating(false)}>
+        <Modal title="Internal support organization creation" onClose={() => setCreating(false)}>
           {createdResult ? <div className="settings-stack">
             <Panel title="Organization created">
               <p><strong>{createdResult.organization?.name}</strong> is pending setup with {createdResult.subscription?.pricing_plan?.name ?? "selected"} plan.</p>
@@ -183,6 +190,7 @@ export function OrganizationsPage() {
             </Panel>
             <button className="primary" onClick={() => setCreating(false)}>Done</button>
           </div> : <>
+          <Alert message="Primary onboarding should use Registration Applications. This form is kept only for internal support/backfill cases." tone="warning" />
           <div className="record-tabs stepper-tabs">{steps.map((label, index) => <button key={label} className={step === index ? "active" : ""} onClick={() => setStep(index)}><span>{index + 1}.</span> {label}</button>)}</div>
           {step === 0 ? <div className="form-grid two">
             <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Daycare name" required />
@@ -208,7 +216,7 @@ export function OrganizationsPage() {
           {step === 1 ? <div className="form-grid two">
             <select value={form.pricing_plan_id} onChange={(event) => setForm({ ...form, pricing_plan_id: event.target.value })}>
               <option value="">Choose pricing plan</option>
-              {(data?.plans ?? []).filter((plan: any) => form.facility_type === "family_child_care" ? plan.available_for_family_child_care : plan.available_for_center_daycare).map((plan: any) => <option key={plan.id} value={plan.id}>{plan.name} - ${Number(plan.monthly_price).toFixed(0)}/month</option>)}
+              {(data?.plans ?? []).filter((plan: any) => isPlanAllowedForFacility(plan, form.facility_type)).map((plan: any) => <option key={plan.id} value={plan.id}>{plan.name} - ${Number(plan.monthly_price).toFixed(0)}/month</option>)}
             </select>
             <select value={form.billing_cycle} onChange={(event) => setForm({ ...form, billing_cycle: event.target.value })}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
             <input type="number" value={form.trial_days} onChange={(event) => setForm({ ...form, trial_days: event.target.value })} placeholder="Trial days optional" />

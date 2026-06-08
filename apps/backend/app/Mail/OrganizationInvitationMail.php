@@ -18,6 +18,7 @@ class OrganizationInvitationMail extends Mailable implements ShouldQueue
     public string $organizationName;
     public string $recipientName;
     public string $role;
+    public string $facilityType;
 
     public function __construct(OrganizationInvitation $invitation)
     {
@@ -25,6 +26,7 @@ class OrganizationInvitationMail extends Mailable implements ShouldQueue
         $this->organizationName = $invitation->organization?->name ?? 'Barbaari';
         $this->recipientName = $invitation->name;
         $this->role = str_replace('_', ' ', ucwords($invitation->role, '_'));
+        $this->facilityType = str_replace('_', ' ', ucwords($invitation->organization?->facility_type ?? 'center_daycare', '_'));
     }
 
     public function envelope(): Envelope

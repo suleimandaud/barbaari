@@ -6,6 +6,7 @@ import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { AcceptInvitePage } from "./pages/AcceptInvitePage";
 import { RegisterProviderPage } from "./pages/RegisterProviderPage";
+import { TabletPortalPage } from "./pages/TabletPortalPage";
 import { SubscriptionPaymentPage } from "./pages/SubscriptionPaymentPage";
 import { SubscriptionSuccessPage } from "./pages/SubscriptionSuccessPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -29,9 +30,17 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 export function App() {
+  const tabletOnlyHost = typeof window !== "undefined" && window.location.hostname.startsWith("tablet-barbaari.");
+
+  if (tabletOnlyHost) {
+    return <BrowserRouter><Routes><Route path="*" element={<TabletPortalPage />} /></Routes></BrowserRouter>;
+  }
+
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/tablet" element={<TabletPortalPage />} />
+        <Route path="/tablet/*" element={<TabletPortalPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />

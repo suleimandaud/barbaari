@@ -54,9 +54,9 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
-    'daycare_web_url' => env('DAYCARE_WEB_URL', env('FRONTEND_URL', 'http://localhost:5173')),
-    'frontend_url' => env('FRONTEND_URL', env('DAYCARE_WEB_URL', 'http://localhost:5173')),
-    'super_admin_web_url' => env('SUPER_ADMIN_WEB_URL', 'http://localhost:5174'),
+    'daycare_web_url' => env('DAYCARE_WEB_URL', env('FRONTEND_URL', 'https://barbaari.pioneeriya.com')),
+    'frontend_url' => env('FRONTEND_URL', env('DAYCARE_WEB_URL', 'https://barbaari.pioneeriya.com')),
+    'super_admin_web_url' => env('SUPER_ADMIN_WEB_URL', 'https://admin-barbaari.pioneeriya.com'),
 
     /*
     |--------------------------------------------------------------------------

@@ -87,7 +87,11 @@ class ApiController extends Controller
         $facilityType = $request->string('facility_type')->toString();
         $query = PricingPlan::where('status', 'active');
         if ($facilityType === 'family_child_care') {
-            $query->where('available_for_family_child_care', true);
+            $query->where('available_for_family_child_care', true)
+                ->where(function ($planQuery) {
+                    $planQuery->whereRaw('LOWER(code) = ?', ['starter'])
+                        ->orWhereRaw('LOWER(name) = ?', ['starter']);
+                });
         } elseif ($facilityType === 'center_daycare') {
             $query->where('available_for_center_daycare', true);
         }
@@ -108,6 +112,9 @@ class ApiController extends Controller
             'state' => ['nullable', 'string', 'max:120'],
             'country' => ['nullable', 'string', 'max:120'],
             'address' => ['nullable', 'string', 'max:255'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'attendance_radius_meters' => ['nullable', 'integer', 'min:25', 'max:5000'],
             'timezone' => ['nullable', 'string', 'max:80'],
             'license_number' => ['nullable', 'string', 'max:255'],
             'license_status' => ['nullable', 'in:not_provided,pending,verified,rejected,expired'],
@@ -118,6 +125,7 @@ class ApiController extends Controller
 
         if (! empty($data['pricing_plan_id'])) {
             $plan = PricingPlan::findOrFail($data['pricing_plan_id']);
+            $this->validateFacilityPlanSelection($data['facility_type'], $plan);
             abort_if(
                 ($data['facility_type'] === 'family_child_care' && ! $plan->available_for_family_child_care)
                 || ($data['facility_type'] === 'center_daycare' && ! $plan->available_for_center_daycare),
@@ -1839,8 +1847,17 @@ class ApiController extends Controller
 
         $created = DB::transaction(function () use ($request, $application, $data) {
             $planId = $data['pricing_plan_id'] ?? $application->pricing_plan_id ?? PricingPlan::where('status', 'active')->orderBy('monthly_price')->value('id');
+            if ($application->facility_type === 'family_child_care' && empty($data['pricing_plan_id']) && empty($application->pricing_plan_id)) {
+                $planId = PricingPlan::where('status', 'active')
+                    ->where(function ($query) {
+                        $query->whereRaw('LOWER(code) = ?', ['starter'])
+                            ->orWhereRaw('LOWER(name) = ?', ['starter']);
+                    })
+                    ->value('id');
+            }
             abort_unless($planId, 422, 'Create an active pricing plan before approving applications.');
             $plan = PricingPlan::findOrFail($planId);
+            $this->validateFacilityPlanSelection($application->facility_type, $plan);
             abort_if(
                 ($application->facility_type === 'family_child_care' && ! $plan->available_for_family_child_care)
                 || ($application->facility_type === 'center_daycare' && ! $plan->available_for_center_daycare),
@@ -1938,6 +1955,7 @@ class ApiController extends Controller
         $created = DB::transaction(function () use ($request, $data) {
             $plan = PricingPlan::findOrFail($data['pricing_plan_id']);
             $facilityType = $data['facility_type'] ?? 'center_daycare';
+            $this->validateFacilityPlanSelection($facilityType, $plan);
             abort_if(
                 ($facilityType === 'family_child_care' && ! $plan->available_for_family_child_care)
                 || ($facilityType === 'center_daycare' && ! $plan->available_for_center_daycare),
@@ -3611,6 +3629,9 @@ class ApiController extends Controller
             'state' => $application->state,
             'country' => $application->country,
             'address' => $application->address,
+            'latitude' => $application->latitude !== null ? (float) $application->latitude : null,
+            'longitude' => $application->longitude !== null ? (float) $application->longitude : null,
+            'attendance_radius_meters' => $application->attendance_radius_meters,
             'timezone' => $application->timezone,
             'license_number' => $application->license_number,
             'license_status' => $application->license_status,
@@ -3645,6 +3666,8 @@ class ApiController extends Controller
             'phone' => $application->phone,
             'email' => $application->owner_email,
             'address' => $application->address,
+            'latitude' => $application->latitude,
+            'longitude' => $application->longitude,
             'city' => $application->city,
             'state' => $application->state,
             'country' => $application->country,
@@ -3655,8 +3678,8 @@ class ApiController extends Controller
             'plan' => $plan->name,
             'mrr' => 0,
             'approved_at' => null,
-            'attendance_radius_meters' => 100,
-            'checkin_radius_meters' => 100,
+            'attendance_radius_meters' => $application->attendance_radius_meters ?: 100,
+            'checkin_radius_meters' => $application->attendance_radius_meters ?: 100,
         ]);
         $this->updateOrganizationTimezone($organization, $timezone);
 
@@ -3689,6 +3712,19 @@ class ApiController extends Controller
             'invoice' => $invoice ? $this->platformInvoicePayload($invoice->fresh(['organization', 'subscription.pricingPlan', 'payments'])) : null,
             'invite_note' => 'Owner/admin invitation email has been queued for delivery.',
         ];
+    }
+
+    private function validateFacilityPlanSelection(string $facilityType, PricingPlan $plan): void
+    {
+        if ($facilityType !== 'family_child_care') {
+            return;
+        }
+
+        abort_unless(
+            strtolower((string) $plan->code) === 'starter' || strtolower((string) $plan->name) === 'starter',
+            422,
+            'Family Child Care registration is available only on the Starter plan.'
+        );
     }
 
     private function platformUserPayload(User $user): array

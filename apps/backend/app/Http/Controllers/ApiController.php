@@ -202,7 +202,7 @@ class ApiController extends Controller
 
     public function tabletBootstrap(Request $request)
     {
-        $mode = $request->string('mode')->toString() ?: 'guardian';
+        $mode = $request->string('mode')->toString() ?: $this->tabletModeForUser($request->user());
         $timezone = $this->attendanceTimezone($this->orgId($request));
         $organization = $request->user()->organization;
         $facilityType = $organization?->facility_type ?? 'center_daycare';
@@ -606,12 +606,24 @@ class ApiController extends Controller
             'reason' => ['nullable', 'string', 'max:255'],
             'notes' => ['nullable', 'string'],
             'assisting_staff_id' => ['nullable', 'exists:users,id'],
+            'signer_type' => ['nullable', 'in:guardian,parent,staff'],
+            'guardian_id' => ['nullable', 'exists:guardians,id'],
+            'signer_name' => ['nullable', 'string', 'max:255'],
+            'verification_method' => ['nullable', 'in:pin'],
+            'pin_verification_id' => ['nullable', 'exists:pin_verification_logs,id'],
+            'signature_name' => ['nullable', 'string', 'max:255'],
             'status' => ['sometimes', 'in:recorded,reviewed,cancelled'],
         ]);
 
         $child = Child::with('guardians')->findOrFail($data['child_id']);
         $tabletMode ? $this->authorizeTabletChild($request, $child) : $this->authorizeChild($request, $child);
         $this->authorizeAssistingStaff($request, $child, $data['assisting_staff_id'] ?? null);
+        if ($tabletMode) {
+            abort_unless(($data['verification_method'] ?? null) === 'pin', 422, 'Please verify the signer PIN before saving an absence.');
+            abort_unless(! empty($data['pin_verification_id']), 422, 'Please verify the signer PIN before saving an absence.');
+            abort_unless(! empty($data['signature_name']), 422, 'Please capture a signature before saving an absence.');
+            $this->consumePinVerificationIfNeeded($request, $data);
+        }
 
         $absence = AbsenceRecord::updateOrCreate(
             ['organization_id' => $child->organization_id, 'child_id' => $child->id, 'absence_date' => Carbon::parse($data['absence_date'] ?? $data['date'])->toDateString()],
@@ -774,9 +786,49 @@ class ApiController extends Controller
         return $this->pickupSignersResponse($child);
     }
 
+    public function tabletChildSigners(Request $request, Child $child)
+    {
+        $this->authorizeTabletChild($request, $child);
+
+        return response()->json(['signers' => $this->tabletSignerList($request, $child)]);
+    }
+
+    public function tabletVerifySignerPin(Request $request)
+    {
+        $data = $request->validate([
+            'child_id' => ['required', 'exists:children,id'],
+            'signer_type' => ['required', 'in:guardian,staff,admin'],
+            'signer_id' => ['required', 'integer'],
+            'pin' => ['required', 'digits_between:4,8'],
+        ]);
+
+        $child = Child::with('guardians', 'classroom')->findOrFail($data['child_id']);
+        $this->authorizeTabletChild($request, $child);
+        [$signerUser, $signer] = $this->resolveTabletSigner($request, $child, $data['signer_type'], (int) $data['signer_id']);
+
+        if (! $signerUser?->pin_hash) {
+            $this->recordSignerPinLog($request, $signerUser, $signer['email'] ?? null, false, 'pin_not_set');
+            throw ValidationException::withMessages(['pin' => ['This signer does not have a tablet PIN yet. Please set a PIN first.']]);
+        }
+
+        if (! Hash::check($data['pin'], $signerUser->pin_hash)) {
+            $this->recordSignerPinLog($request, $signerUser, $signer['email'] ?? null, false, 'invalid_pin');
+            throw ValidationException::withMessages(['pin' => ['Incorrect signer PIN.']]);
+        }
+
+        $log = $this->recordSignerPinLog($request, $signerUser, $signer['email'] ?? null, true);
+
+        return response()->json([
+            'message' => 'Signer PIN verified.',
+            'pin_verification_id' => $log->id,
+            'verified_at' => optional($log->verified_at)->toDateTimeString(),
+            'signer' => $signer,
+        ]);
+    }
+
     private function pickupSignersResponse(Child $child)
     {
-        $child->load('guardians');
+        $child->load('guardians.user');
 
         $guardians = $child->guardians->map(fn ($guardian) => [
             'id' => (string) $guardian->id,
@@ -785,6 +837,7 @@ class ApiController extends Controller
             'relationship' => $guardian->relationship,
             'phone' => $guardian->phone,
             'email' => $guardian->email,
+            'pin_configured' => (bool) $guardian->user?->pin_hash,
             'can_pickup' => (bool) ($guardian->pivot?->pickup_authorized ?? $guardian->can_pickup),
         ])->values();
 
@@ -804,6 +857,118 @@ class ApiController extends Controller
             ]);
 
         return response()->json(['signers' => $guardians->concat($authorized)->values()]);
+    }
+
+    private function tabletSignerList(Request $request, Child $child): \Illuminate\Support\Collection
+    {
+        $organization = $request->user()->organization;
+        $facilityType = $organization?->facility_type ?? 'center_daycare';
+        $child->load('guardians.user', 'classroom');
+
+        $guardians = $child->guardians
+            ->filter(fn (Guardian $guardian) => $guardian->status === 'active')
+            ->map(fn (Guardian $guardian) => [
+                'id' => (string) $guardian->id,
+                'type' => 'guardian',
+                'name' => $guardian->name,
+                'relationship' => $guardian->relationship ?: 'Guardian',
+                'email' => $guardian->email,
+                'pin_configured' => (bool) $guardian->user?->pin_hash,
+                'can_pickup' => (bool) ($guardian->pivot?->pickup_authorized ?? $guardian->can_pickup),
+            ])
+            ->values();
+
+        if ($facilityType === 'family_child_care') {
+            $owners = User::where('organization_id', $this->orgId($request))
+                ->whereIn('role', $this->managerRoles)
+                ->where('status', 'active')
+                ->get()
+                ->map(fn (User $user) => [
+                    'id' => (string) $user->id,
+                    'type' => 'admin',
+                    'name' => $user->name,
+                    'relationship' => $user->role === 'manager' ? 'Manager / owner' : 'Owner / admin',
+                    'email' => $user->email,
+                    'pin_configured' => (bool) $user->pin_hash,
+                    'can_pickup' => true,
+                ]);
+
+            return $guardians->concat($owners)->values();
+        }
+
+        $staff = StaffProfile::with('user')
+            ->where('organization_id', $this->orgId($request))
+            ->where('classroom_id', $child->classroom_id)
+            ->whereHas('user', fn ($query) => $query->whereIn('role', $this->staffRoles)->where('status', 'active'))
+            ->get()
+            ->map(fn (StaffProfile $profile) => [
+                'id' => (string) $profile->user_id,
+                'type' => 'staff',
+                'name' => $profile->user?->name,
+                'relationship' => $profile->user?->role === 'teacher' ? 'Classroom teacher' : 'Classroom staff',
+                'email' => $profile->user?->email,
+                'pin_configured' => (bool) $profile->user?->pin_hash,
+                'can_pickup' => true,
+            ]);
+
+        return $guardians->concat($staff)->values();
+    }
+
+    private function resolveTabletSigner(Request $request, Child $child, string $type, int $id): array
+    {
+        if ($type === 'guardian') {
+            $guardian = $child->guardians()
+                ->with('user')
+                ->where('guardians.id', $id)
+                ->where('guardians.status', 'active')
+                ->first();
+            abort_unless($guardian, 403, 'This guardian is not linked to the selected child.');
+            $user = $guardian->user ?: User::where('organization_id', $this->orgId($request))->where('email', $guardian->email)->where('role', 'parent')->first();
+            abort_unless($user?->status === 'active', 403, 'This guardian account is not active yet. Please accept the invite first.');
+
+            return [$user, [
+                'id' => (string) $guardian->id,
+                'type' => 'guardian',
+                'name' => $guardian->name,
+                'relationship' => $guardian->relationship ?: 'Guardian',
+                'email' => $guardian->email,
+                'pin_configured' => (bool) $user->pin_hash,
+            ]];
+        }
+
+        $user = User::with('staffProfile')->where('organization_id', $this->orgId($request))->where('id', $id)->where('status', 'active')->first();
+        abort_unless($user, 403, 'Selected signer is not active.');
+
+        if ($type === 'staff') {
+            abort_unless(in_array($user->role, $this->staffRoles, true), 403, 'Selected signer is not assigned staff.');
+            abort_unless((int) $user->staffProfile?->classroom_id === (int) $child->classroom_id, 403, 'Selected staff can only sign for their assigned classroom.');
+        } else {
+            abort_unless(($request->user()->organization?->facility_type ?? 'center_daycare') === 'family_child_care', 403, 'Owner/admin signer is only available for family child care.');
+            abort_unless(in_array($user->role, $this->managerRoles, true), 403, 'Selected signer must be the owner/admin.');
+        }
+
+        return [$user, [
+            'id' => (string) $user->id,
+            'type' => $type,
+            'name' => $user->name,
+            'relationship' => $type === 'staff' ? ($user->role === 'teacher' ? 'Classroom teacher' : 'Classroom staff') : ($user->role === 'manager' ? 'Manager / owner' : 'Owner / admin'),
+            'email' => $user->email,
+            'pin_configured' => (bool) $user->pin_hash,
+        ]];
+    }
+
+    private function recordSignerPinLog(Request $request, ?User $user, ?string $email, bool $success, ?string $failureReason = null): PinVerificationLog
+    {
+        return PinVerificationLog::create([
+            'user_id' => $user?->id,
+            'organization_id' => $user?->organization_id ?? $this->orgId($request),
+            'email' => $user?->email ?? $email,
+            'success' => $success,
+            'purpose' => 'tablet_signer',
+            'failure_reason' => $failureReason,
+            'ip_address' => $request->ip(),
+            'verified_at' => $success ? now() : null,
+        ]);
     }
 
     public function guardianCheckIn(Request $request)
@@ -849,9 +1014,9 @@ class ApiController extends Controller
         $tabletMode ? $this->authorizeTabletChild($request, $child) : $this->authorizeChild($request, $child);
         $this->authorizeAssistingStaff($request, $child, $data['assisting_staff_id'] ?? null);
         $this->rejectUnavailableVerificationMethod($data);
-        $this->consumePinVerificationIfNeeded($request, $data);
 
         [$guardianId, $pickupAuthorizationId, $signerName, $signerType] = $this->validatedAttendanceSigner($request, $child, $data);
+        $this->consumePinVerificationIfNeeded($request, $data);
         if (($data['verification_method'] ?? null) === 'digital_signature') {
             abort_unless(! empty($data['signature_data']) || ! empty($data['signature_name']), 422, 'Please capture a signature before saving attendance.');
         }
@@ -3062,14 +3227,27 @@ class ApiController extends Controller
             return;
         }
 
-        $log = PinVerificationLog::where('id', $data['pin_verification_id'] ?? 0)
-            ->where('user_id', $request->user()->id)
+        $query = PinVerificationLog::where('id', $data['pin_verification_id'] ?? 0)
             ->where('success', true)
             ->whereNull('used_at')
-            ->where('verified_at', '>=', now()->subMinutes(10))
-            ->first();
+            ->where('verified_at', '>=', now()->subMinutes(10));
 
-        abort_unless($log, 422, 'Please verify the staff PIN before using PIN attendance.');
+        if (in_array($data['signer_type'] ?? null, ['guardian', 'parent'], true) && ! empty($data['guardian_id'])) {
+            $guardian = Guardian::with('user')->find($data['guardian_id']);
+            if ($guardian?->user_id) {
+                $query->where('user_id', $guardian->user_id);
+            } else {
+                $query->where('email', $guardian?->email);
+            }
+        } elseif (($data['signer_type'] ?? null) === 'staff' && ! empty($data['assisting_staff_id'])) {
+            $query->where('user_id', $data['assisting_staff_id']);
+        } else {
+            $query->where('user_id', $request->user()->id);
+        }
+
+        $log = $query->first();
+
+        abort_unless($log, 422, 'Please verify the signer PIN before saving attendance.');
         $log->update(['used_at' => now()]);
     }
 
@@ -3720,11 +3898,11 @@ class ApiController extends Controller
             return;
         }
 
-        abort_unless(
-            strtolower((string) $plan->code) === 'starter' || strtolower((string) $plan->name) === 'starter',
-            422,
-            'Family Child Care registration is available only on the Starter plan.'
-        );
+        if (strtolower((string) $plan->code) !== 'starter' && strtolower((string) $plan->name) !== 'starter') {
+            throw ValidationException::withMessages([
+                'pricing_plan_id' => ['Family Child Care registration is available only on the Starter plan.'],
+            ]);
+        }
     }
 
     private function platformUserPayload(User $user): array

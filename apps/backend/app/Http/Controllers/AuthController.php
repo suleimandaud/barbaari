@@ -129,7 +129,7 @@ class AuthController extends Controller
     public function tabletUnlock(Request $request)
     {
         $data = $request->validate([
-            'mode' => ['required', 'in:guardian,staff,admin'],
+            'mode' => ['nullable', 'in:guardian,staff,admin'],
             'email' => ['required', 'email'],
             'pin' => ['nullable', 'digits_between:4,8'],
             'password_or_pin' => ['nullable', 'string'],
@@ -159,7 +159,7 @@ class AuthController extends Controller
                 'subscription_status' => $subscriptionGate['subscription_status'],
             ], 402);
         }
-        $mode = $data['mode'];
+        $mode = $data['mode'] ?? $this->tabletModeForUser($user);
         if ($mode === 'guardian') {
             if ($user->role !== 'parent') {
                 return response()->json(['message' => 'Only parent or guardian accounts can unlock parent/guardian mode.'], 403);
@@ -206,7 +206,8 @@ class AuthController extends Controller
             if (! in_array($user->role, ['staff', 'teacher'], true)) {
                 return response()->json(['message' => 'Only staff or teacher accounts can unlock staff mode.'], 403);
             }
-            if (! $user->pin_hash || ! Hash::check($data['pin'] ?? '', $user->pin_hash)) {
+            $credential = $data['pin'] ?? $data['password_or_pin'] ?? '';
+            if (! $user->pin_hash || ! Hash::check($credential, $user->pin_hash)) {
                 $this->pinLog($request, $user, false, $data['purpose'] ?? 'tablet_staff', $user->pin_hash ? 'invalid_pin' : 'pin_not_set');
                 throw ValidationException::withMessages(['pin' => [$user->pin_hash ? 'Incorrect staff PIN.' : 'No staff PIN is set. Reset it from Staff Access.']]);
             }
@@ -524,6 +525,18 @@ class AuthController extends Controller
                 'mode' => $mode,
             ],
         ];
+    }
+
+    private function tabletModeForUser(User $user): string
+    {
+        if ($user->role === 'parent') {
+            return 'guardian';
+        }
+        if (in_array($user->role, ['staff', 'teacher'], true)) {
+            return 'staff';
+        }
+
+        return 'admin';
     }
 
     private function ensureSubscriptionInvoice(Subscription $subscription): void

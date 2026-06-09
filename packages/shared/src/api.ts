@@ -63,7 +63,7 @@ export const authApi = {
     setBearerToken(response.token);
     return response;
   },
-  async tabletUnlock(payload: { mode: "guardian" | "staff" | "admin"; email: string; pin?: string; password_or_pin?: string; purpose?: string }) {
+  async tabletUnlock(payload: { mode?: "guardian" | "staff" | "admin"; email: string; pin?: string; password_or_pin?: string; purpose?: string }) {
     const response = await data<LoginResponse & { role: string; mode: string; organization_id: number; allowed_modes: string[]; visible_classroom_ids: string[]; visible_child_ids: string[]; timezone: string; permissions: Record<string, unknown>; tablet_permissions: Record<string, unknown>; pin_verification_id: number; verified_at: string }>(api.post("/auth/tablet-unlock", payload));
     setBearerToken(response.token);
     return response;
@@ -216,13 +216,19 @@ export const tabletApi = {
   pickupSigners(id: string | number) {
     return data<ListResponse<any, "signers">>(api.get(`/tablet/children/${id}/pickup-signers`));
   },
+  signers(id: string | number) {
+    return data<ListResponse<any, "signers">>(api.get(`/tablet/children/${id}/signers`));
+  },
+  verifySignerPin(payload: { child_id: string | number; signer_type: string; signer_id: string | number; pin: string }) {
+    return data<{ message: string; pin_verification_id: number; verified_at: string; signer: any }>(api.post("/tablet/signers/verify-pin", payload));
+  },
   guardianCheckIn(payload: Record<string, unknown>) {
     return data<{ attendance: any }>(api.post("/tablet/attendance/guardian-check-in", payload));
   },
   guardianCheckOut(payload: Record<string, unknown>) {
     return data<{ attendance: any }>(api.post("/tablet/attendance/guardian-check-out", payload));
   },
-  markAbsent(payload: { child_id: string | number; absence_date: string; absence_type: string; reason?: string; notes?: string; status?: string; assisting_staff_id?: string | number }) {
+  markAbsent(payload: { child_id: string | number; absence_date: string; absence_type: string; reason?: string; notes?: string; status?: string; assisting_staff_id?: string | number; signer_type?: string; guardian_id?: string | number; signer_name?: string; verification_method?: string; pin_verification_id?: string | number; signature_name?: string }) {
     return data<{ absence_record: any }>(api.post("/tablet/absence-records", payload));
   }
 };

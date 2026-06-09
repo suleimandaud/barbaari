@@ -97,9 +97,11 @@ Route::middleware(['auth:sanctum', 'subscription.active'])->group(function () {
 
     Route::get('tablet/bootstrap', [ApiController::class, 'tabletBootstrap'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
     Route::get('tablet/children/{child}/pickup-signers', [ApiController::class, 'tabletPickupSigners'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
+    Route::get('tablet/children/{child}/signers', [ApiController::class, 'tabletChildSigners'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
+    Route::post('tablet/signers/verify-pin', [ApiController::class, 'tabletVerifySignerPin'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
     Route::post('tablet/attendance/guardian-check-in', [ApiController::class, 'tabletGuardianCheckIn'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
     Route::post('tablet/attendance/guardian-check-out', [ApiController::class, 'tabletGuardianCheckOut'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
-    Route::post('tablet/absence-records', [ApiController::class, 'tabletCreateAbsenceRecord'])->middleware('role:staff,teacher,daycare_admin,manager');
+    Route::post('tablet/absence-records', [ApiController::class, 'tabletCreateAbsenceRecord'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
 
     Route::get('billing/invoices', [ApiController::class, 'invoices']);
     Route::get('billing/invoices/{invoice}', [ApiController::class, 'showInvoice']);

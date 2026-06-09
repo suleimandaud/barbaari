@@ -39,6 +39,12 @@ export function RegisterProviderPage() {
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState("");
   const [error, setError] = useState("");
+  const selectedPlan = plans.find((plan) => String(plan.id) === String(form.pricing_plan_id)) ?? plans[0];
+  const selectedPrice = selectedPlan
+    ? form.billing_cycle === "yearly"
+      ? `$${Number(selectedPlan.yearly_price).toFixed(0)}/year`
+      : `$${Number(selectedPlan.monthly_price).toFixed(0)}/month`
+    : "";
 
   useEffect(() => {
     let mounted = true;
@@ -107,17 +113,26 @@ export function RegisterProviderPage() {
           <input value={form.license_number} onChange={(event) => setForm({ ...form, license_number: event.target.value })} placeholder="License number optional" />
           <select value={form.license_status} onChange={(event) => setForm({ ...form, license_status: event.target.value })}><option value="not_provided">License not provided</option><option value="pending">Pending</option><option value="verified">Verified</option></select>
           <label className="field-stack full"><span>Desired plan</span><select value={form.pricing_plan_id} onChange={(event) => setForm({ ...form, pricing_plan_id: event.target.value })}>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - ${Number(plan.monthly_price).toFixed(0)}/month ({plan.child_limit} children, {plan.staff_limit} staff, {plan.device_limit} tablets)</option>)}</select></label>
-          <div className="full placeholder-grid">
-            {plans.map((plan) => (
-              <article className="child-card" key={plan.id}>
-                <strong>{plan.name}</strong>
-                <span>${Number(plan.monthly_price).toFixed(0)}/month or ${Number(plan.yearly_price).toFixed(0)}/year</span>
-                <p className="muted">{plan.child_limit} children, {plan.staff_limit} staff, {plan.device_limit} tablet devices</p>
-                {planFeatures(plan) ? <small>{planFeatures(plan)}</small> : null}
-              </article>
-            ))}
-          </div>
           <select value={form.billing_cycle} onChange={(event) => setForm({ ...form, billing_cycle: event.target.value })}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
+          {selectedPlan ? (
+            <article className="plan-explainer full">
+              <div>
+                <span>Selected plan</span>
+                <strong>{selectedPlan.name}</strong>
+              </div>
+              <div>
+                <span>Price</span>
+                <strong>{selectedPrice}</strong>
+              </div>
+              <ul>
+                <li>{selectedPlan.child_limit} children</li>
+                <li>{selectedPlan.staff_limit} staff</li>
+                <li>{selectedPlan.device_limit} tablet devices</li>
+              </ul>
+              {planFeatures(selectedPlan) ? <p>{planFeatures(selectedPlan)}</p> : null}
+              {form.facility_type === "family_child_care" ? <small>Family Child Care registration is available on Starter only.</small> : null}
+            </article>
+          ) : null}
           <textarea className="full" value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="Notes optional" rows={4} />
           <button className="primary full" disabled={saving}>{saving ? "Submitting..." : "Submit application"}</button>
         </form>

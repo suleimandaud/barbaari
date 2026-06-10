@@ -82,6 +82,7 @@ Route::middleware(['auth:sanctum', 'subscription.active'])->group(function () {
     Route::post('users/{user}/status', [ApiController::class, 'updateUserStatus'])->middleware('role:daycare_admin,manager');
 
     Route::get('staff/profile', [ApiController::class, 'staffProfile'])->middleware('role:staff,teacher,daycare_admin,manager');
+    Route::post('settings/owner-tablet-pin', [ApiController::class, 'updateOwnerTabletPin'])->middleware('role:daycare_admin,manager');
     Route::post('staff', [ApiController::class, 'createUser'])->middleware('role:daycare_admin,manager');
     Route::patch('staff/{user}', [ApiController::class, 'updateUser'])->middleware('role:daycare_admin,manager');
     Route::patch('staff/{user}/assign-classroom', [ApiController::class, 'assignStaffClassroom'])->middleware('role:daycare_admin,manager');

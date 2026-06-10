@@ -1269,6 +1269,24 @@ class ApiController extends Controller
         return response()->json(['message' => 'Staff PIN reset.']);
     }
 
+    public function updateOwnerTabletPin(Request $request)
+    {
+        $user = $request->user();
+        abort_unless($user?->organization_id, 403);
+        abort_unless(($user->organization?->facility_type ?? 'center_daycare') === 'family_child_care', 403, 'Owner tablet PIN setup is available for Family Child Care accounts.');
+        abort_unless(in_array($user->role, ['daycare_admin', 'manager'], true), 403, 'Only the Family Child Care owner or admin can update their own tablet PIN.');
+
+        $data = $request->validate(['pin' => ['required', 'regex:/^\d{4,8}$/']]);
+        $user->update(['pin_hash' => Hash::make($data['pin']), 'pin_failed_attempts' => 0, 'pin_locked_until' => null]);
+        $this->platformAudit($request, 'owner.tablet_pin_updated', $user);
+
+        return response()->json([
+            'message' => 'Owner tablet PIN updated.',
+            'user' => $user->fresh('organization'),
+            'pin_configured' => true,
+        ]);
+    }
+
     public function sendStaffInvite(Request $request, User $user)
     {
         abort_unless($user->organization_id === $this->orgId($request), 403);

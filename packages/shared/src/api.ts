@@ -110,6 +110,9 @@ export const organizationApi = {
   },
   update(payload: Record<string, unknown>) {
     return data<{ organization: any }>(api.put("/manager/organization", payload));
+  },
+  updateOwnerTabletPin(pin: string) {
+    return data<{ message: string; user: any; pin_configured: boolean }>(api.post("/settings/owner-tablet-pin", { pin }));
   }
 };
 

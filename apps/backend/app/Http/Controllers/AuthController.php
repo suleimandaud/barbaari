@@ -74,7 +74,11 @@ class AuthController extends Controller
 
     public function me(Request $request)
     {
-        return response()->json(['user' => $request->user()->load('organization', 'staffProfile.classroom')]);
+        $user = $request->user()->load('organization', 'staffProfile.classroom');
+        $payload = $user->toArray();
+        $payload['tablet_pin_configured'] = (bool) $user->pin_hash;
+
+        return response()->json(['user' => $payload]);
     }
 
     public function logout(Request $request)

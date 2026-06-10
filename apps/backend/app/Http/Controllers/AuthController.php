@@ -145,6 +145,9 @@ class AuthController extends Controller
         if ($user->role === 'super_admin') {
             return response()->json(['message' => 'Super admin cannot unlock daily attendance tablet mode.'], 403);
         }
+        if ($user->role === 'parent') {
+            return response()->json(['message' => 'Parents and guardians do not unlock tablet mode. Ask provider staff to open the tablet and select you as the signer.'], 403);
+        }
         if (! $user->organization_id || ! $user->organization) {
             return response()->json(['message' => 'This account is not linked to an active provider organization.'], 403);
         }
@@ -161,44 +164,7 @@ class AuthController extends Controller
         }
         $mode = $data['mode'] ?? $this->tabletModeForUser($user);
         if ($mode === 'guardian') {
-            if ($user->role !== 'parent') {
-                return response()->json(['message' => 'Only parent or guardian accounts can unlock parent/guardian mode.'], 403);
-            }
-            if ($user->status !== 'active') {
-                return response()->json(['message' => 'This guardian account is not active yet. Please accept the invite first.'], 403);
-            }
-            $guardianQuery = Guardian::where('organization_id', $user->organization_id)
-                ->where(function ($query) use ($user) {
-                    $query->where('user_id', $user->id)
-                        ->orWhere('email', $user->email);
-                });
-            $activeGuardianIds = (clone $guardianQuery)->where('status', 'active')->pluck('id');
-            if ((clone $guardianQuery)->exists() && $activeGuardianIds->isEmpty()) {
-                return response()->json(['message' => 'Guardian account is not active. Please accept the invite or ask admin to activate the account.'], 403);
-            }
-            if ($activeGuardianIds->isEmpty()) {
-                return response()->json(['message' => 'No active guardian profile is linked to this account. Please ask daycare staff to send an invite and link a child.'], 403);
-            }
-            $linkedChildrenCount = \App\Models\Child::where('organization_id', $user->organization_id)
-                ->whereHas('guardians', fn ($query) => $query->whereIn('guardians.id', $activeGuardianIds))
-                ->count();
-            if ($linkedChildrenCount === 0) {
-                return response()->json(['message' => 'No linked children are available for this guardian account.'], 403);
-            }
-            $credential = $data['password_or_pin'] ?? $data['pin'] ?? null;
-            if (! $credential) {
-                throw ValidationException::withMessages(['password_or_pin' => ['Enter the guardian password or tablet PIN.']]);
-            }
-            $passwordOk = Hash::check($credential, $user->password);
-            $pinOk = $user->pin_hash && Hash::check($credential, $user->pin_hash);
-            if (! $passwordOk && ! $user->pin_hash) {
-                $this->pinLog($request, $user, false, $data['purpose'] ?? 'tablet_guardian', 'pin_not_set');
-                throw ValidationException::withMessages(['password_or_pin' => ['No tablet PIN is configured for this guardian. Use the account password or ask daycare staff to reset the tablet PIN.']]);
-            }
-            if (! $passwordOk && ! $pinOk) {
-                $this->pinLog($request, $user, false, $data['purpose'] ?? 'tablet_guardian', 'invalid_parent_credential');
-                throw ValidationException::withMessages(['password_or_pin' => ['Incorrect PIN or password.']]);
-            }
+            return response()->json(['message' => 'Parents and guardians do not unlock tablet mode. Ask provider staff to open the tablet and select you as the signer.'], 403);
         } elseif ($mode === 'staff') {
             if ($user->status !== 'active') {
                 return response()->json(['message' => 'This staff account is inactive.'], 403);

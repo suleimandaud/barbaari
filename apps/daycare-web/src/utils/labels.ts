@@ -18,7 +18,7 @@ export function childLabel(child: any) {
 
 export function guardianLabel(guardian: any) {
   if (!guardian) return "Select guardian";
-  return `${guardian.name}${guardian.phone ? ` - ${guardian.phone}` : ""}${guardian.email ? ` - ${guardian.email}` : ""}`;
+  return `${guardian.name}${guardian.phone ? ` - ${guardian.phone}` : ""}`;
 }
 
 export function classroomLabel(classroom: any) {

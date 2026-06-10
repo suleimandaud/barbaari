@@ -48,5 +48,7 @@ export const mobileApi = {
   markAbsent: tabletApi.markAbsent,
   guardianCheckIn: tabletApi.guardianCheckIn,
   guardianCheckOut: tabletApi.guardianCheckOut,
-  tabletPickupSigners: tabletApi.pickupSigners
+  tabletPickupSigners: tabletApi.pickupSigners,
+  tabletSigners: tabletApi.signers,
+  verifySignerPin: tabletApi.verifySignerPin
 };

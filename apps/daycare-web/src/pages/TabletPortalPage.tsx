@@ -263,7 +263,7 @@ export function TabletPortalPage() {
         {step === "unlock" ? (
           <section className="kiosk-card">
             <h2>Unlock tablet</h2>
-            <p className="muted">Enter an active parent, staff, or admin account. The tablet will open only if the organization and subscription are active.</p>
+            <p className="muted">Enter an active provider staff, teacher, owner, or admin account. Guardians are selected later as attendance signers and verify with their tablet PIN.</p>
             <div className="form-grid two">
               <label className="field-stack"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
               <label className="field-stack"><span>Password or tablet PIN</span><input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /></label>

@@ -73,9 +73,10 @@ export default function Kiosk() {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState<Step>("welcome");
-  const [mode, setMode] = useState<"guardian" | "staff" | "admin">("guardian");
+  const [mode, setMode] = useState<"staff" | "admin">("admin");
   const [email, setEmail] = useState(user?.email ?? "");
   const [pin, setPin] = useState("");
+  const [pinVerificationId, setPinVerificationId] = useState<number | undefined>();
   const [unlocked, setUnlocked] = useState(false);
   const [unlockedUser, setUnlockedUser] = useState<MobileUser | null>(null);
   const [data, setData] = useState<{ children: any[]; classrooms: any[]; attendance: any[]; absences: any[]; staff?: any[]; timezone?: string; localDate?: string; scopeLabel?: string; facility_type?: string; facilityType?: string; uses_classrooms?: boolean } | null>(null);
@@ -84,8 +85,6 @@ export default function Kiosk() {
   const [selectedAction, setSelectedAction] = useState<Action>("in");
   const [signers, setSigners] = useState<any[]>([]);
   const [selectedSignerKey, setSelectedSignerKey] = useState("");
-  const [assistingStaffId, setAssistingStaffId] = useState("");
-  const [verification, setVerification] = useState<"secure_login" | "pin" | "digital_signature">("digital_signature");
   const [signatureName, setSignatureName] = useState("");
   const [absenceType, setAbsenceType] = useState<AbsenceType>("no_show");
   const [absenceReason, setAbsenceReason] = useState("");
@@ -106,14 +105,8 @@ export default function Kiosk() {
 
   const selectedChild = useMemo(() => data?.children.find((child) => String(child.id) === selectedChildId), [data?.children, selectedChildId]);
   const selectedSigner = useMemo(() => {
-    if (selectedSignerKey === "staff:admin") return { id: "admin", type: "staff", name: unlockedUser?.name ?? "Admin-assisted", can_pickup: true };
-    if (selectedSignerKey.startsWith("staff:")) {
-      const staffId = selectedSignerKey.replace("staff:", "");
-      const assistingStaff = (data?.staff ?? []).find((staff) => String(staff.id) === staffId);
-      if (assistingStaff) return { id: assistingStaff.id, type: "staff", name: assistingStaff.name ?? "Staff-assisted", can_pickup: true };
-    }
     return signers.find((signer) => `${signer.type}:${signer.id}` === selectedSignerKey);
-  }, [data?.staff, selectedSignerKey, signers, unlockedUser?.name]);
+  }, [selectedSignerKey, signers]);
 
   const classroomChildren = useMemo(() => {
     const children = data?.children ?? [];
@@ -140,7 +133,7 @@ export default function Kiosk() {
       const usesClassrooms = response.uses_classrooms !== false && response.facility_type !== "family_child_care" && response.facilityType !== "family_child_care";
       if (!response.children.length) {
         setData(response);
-        setLoadError(selectedMode === "guardian" ? "No linked children are available for this parent/guardian account." : "No children are available for this account.");
+        setLoadError("No children are available for this account.");
         return;
       }
       setData(response);
@@ -155,7 +148,7 @@ export default function Kiosk() {
 
   async function unlockWithPin() {
     if (!email.trim() || !pin.trim()) {
-      Alert.alert("Unlock required", mode === "guardian" ? "Enter parent/guardian email and password or PIN." : mode === "staff" ? "Enter staff email and PIN." : "Enter admin or manager email and PIN.");
+      Alert.alert("Unlock required", mode === "staff" ? "Enter staff email and PIN." : "Enter admin or manager email and PIN or password.");
       return;
     }
     setSaving(true);
@@ -181,7 +174,7 @@ export default function Kiosk() {
     setSelectedChildId(String(child.id));
     setSaving(true);
     try {
-      const response = await mobileApi.tabletPickupSigners(child.id);
+      const response = await mobileApi.tabletSigners(child.id);
       setSigners(response.signers ?? []);
       setSelectedSignerKey("");
       setSignatureName("");
@@ -200,41 +193,54 @@ export default function Kiosk() {
 
   function chooseSigner(key: string) {
     setSelectedSignerKey(key);
-    if (key === "staff:staff") {
-      setSignatureName(user?.name ?? "Staff-assisted");
-      return;
-    }
     const signer = signers.find((item) => `${item.type}:${item.id}` === key);
     setSignatureName(signer?.name ?? "");
   }
 
-  function chooseAssistingStaff(staff: any) {
-    setAssistingStaffId(String(staff.id));
-    setSelectedSignerKey(`staff:${staff.id}`);
-    setSignatureName(staff.name ?? "Staff-assisted");
-    setPoints([]);
+  async function verifySelectedSignerPin() {
+    if (!selectedChild || !selectedSigner) return;
+    if (!selectedSigner.pin_configured) {
+      Alert.alert("PIN missing", "This signer does not have a tablet PIN yet. Please set a PIN first.");
+      return;
+    }
+    if (!pin.trim()) {
+      Alert.alert("Signer PIN required", "Enter the selected signer's tablet PIN.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const response = await mobileApi.verifySignerPin({
+        child_id: selectedChild.id,
+        signer_type: selectedSigner.type,
+        signer_id: selectedSigner.id,
+        pin: pin.trim()
+      });
+      setPinVerificationId(response.pin_verification_id);
+      setSignatureName(selectedSigner.name ?? "");
+      setPin("");
+      setStep("signature");
+    } catch (err) {
+      Alert.alert("PIN not verified", getApiError(err).message || "Incorrect signer PIN.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function submitAttendance() {
     if (!selectedChild) return;
-    const assistingStaff = (data?.staff ?? []).find((staff) => String(staff.id) === assistingStaffId);
-    if (mode === "staff" && !assistingStaff) {
-      Alert.alert("Assisting staff required", "Choose the staff member helping with this attendance action.");
+    if (!selectedSigner) {
+      Alert.alert("Authorized signer required", "Choose a linked guardian, assigned staff member, or owner/admin signer.");
       return;
     }
-    if (mode === "staff" && assistingStaff?.classroomId && String(assistingStaff.classroomId) !== String(selectedChild.classroomId)) {
-      Alert.alert("Classroom permission", "Selected staff can only assist their assigned classroom.");
-      return;
-    }
-    if (selectedAction !== "absent" && mode !== "staff" && !selectedSigner) {
-      Alert.alert("Authorized signer required", "Choose a parent, guardian, authorized pickup, or staff-assisted signer.");
+    if (!pinVerificationId) {
+      Alert.alert("Signer PIN required", "Verify the selected signer PIN before capturing the signature.");
       return;
     }
     if (selectedSigner && selectedSigner.type !== "staff" && !selectedSigner.can_pickup) {
       Alert.alert("Unauthorized pickup blocked", "This person is linked to the child but is not active for pickup signing.");
       return;
     }
-    if (selectedAction !== "absent" && (!signatureName.trim() || points.length < 4)) {
+    if (!signatureName.trim() || points.length < 4) {
       Alert.alert("Signature required", "Type the signer name and draw a signature before submitting.");
       return;
     }
@@ -242,25 +248,16 @@ export default function Kiosk() {
     setSaving(true);
     try {
       if (selectedAction === "absent") {
-        if (mode === "guardian") {
-          Alert.alert("Not allowed", "Parent / guardian mode cannot mark absences.");
-          return;
-        }
-        await mobileApi.markAbsent({ child_id: selectedChild.id, absence_date: data?.localDate ?? new Date().toISOString().slice(0, 10), absence_type: absenceType, reason: absenceReason.trim() || `Marked ${absenceLabel(absenceType).toLowerCase()} from tablet kiosk`, notes: absenceNotes.trim() || (assistingStaff ? `Tablet attendance flow. Assisting staff: ${assistingStaff.name}` : "Tablet attendance flow"), assisting_staff_id: assistingStaff?.id });
+        await mobileApi.markAbsent({ child_id: selectedChild.id, absence_date: data?.localDate ?? new Date().toISOString().slice(0, 10), absence_type: absenceType, reason: absenceReason.trim() || `Marked ${absenceLabel(absenceType).toLowerCase()} from tablet kiosk`, notes: absenceNotes.trim() || "Tablet attendance flow", signer_type: selectedSigner.type === "guardian" ? "guardian" : "staff", guardian_id: selectedSigner.type === "guardian" ? selectedSigner.id : undefined, assisting_staff_id: selectedSigner.type === "staff" || selectedSigner.type === "admin" ? selectedSigner.id : undefined, signer_name: selectedSigner.name, verification_method: "pin", pin_verification_id: pinVerificationId, signature_name: signatureName.trim() });
       } else {
-        let pinVerificationId: number | undefined;
-        if (verification === "pin") {
-          const pinResponse = await mobileApi.verifyPin({ pin, purpose: "tablet_attendance" });
-          pinVerificationId = pinResponse.pin_verification_id;
-        }
-        const effectiveSigner = mode === "staff" ? { id: assistingStaff.id, type: "staff", name: assistingStaff.name } : selectedSigner;
-        const signerType = effectiveSigner.type === "authorized_pickup" ? "authorized_pickup" : effectiveSigner.type === "staff" ? "staff" : "guardian";
+        const effectiveSigner = selectedSigner;
+        const signerType = effectiveSigner.type === "authorized_pickup" ? "authorized_pickup" : (effectiveSigner.type === "staff" || effectiveSigner.type === "admin") ? "staff" : "guardian";
         const location = await deviceLocation();
         const payload: Record<string, unknown> = {
           child_id: selectedChild.id,
           signer_type: signerType,
           signer_name: effectiveSigner.name,
-          verification_method: verification,
+          verification_method: "pin",
           signature_name: signatureName.trim(),
           signature_data: JSON.stringify({ points, box: signatureBox.current }),
           signature_reference: "tablet-drawn-signature",
@@ -270,11 +267,11 @@ export default function Kiosk() {
         };
         if (effectiveSigner.type === "guardian") payload.guardian_id = effectiveSigner.id;
         if (effectiveSigner.type === "authorized_pickup") payload.pickup_authorization_id = effectiveSigner.id;
-        if (mode === "staff") payload.assisting_staff_id = assistingStaff.id;
+        if (effectiveSigner.type === "staff" || effectiveSigner.type === "admin") payload.assisting_staff_id = effectiveSigner.id;
         if (selectedAction === "in") await mobileApi.guardianCheckIn(payload);
         else await mobileApi.guardianCheckOut({ ...payload, early_checkout: selectedAction === "early" });
       }
-      setConfirmation({ child: selectedChild.name, action: actionLabels[selectedAction], time: formatAttendanceTime(new Date(), data?.timezone ?? DEFAULT_ATTENDANCE_TIMEZONE), actor: unlockedUser?.name ?? user?.name ?? "Actor", signer: assistingStaff?.name ?? selectedSigner?.name ?? unlockedUser?.name ?? "Signer", verification, absenceType: selectedAction === "absent" ? absenceLabel(absenceType) : undefined });
+      setConfirmation({ child: selectedChild.name, action: actionLabels[selectedAction], time: formatAttendanceTime(new Date(), data?.timezone ?? DEFAULT_ATTENDANCE_TIMEZONE), actor: unlockedUser?.name ?? user?.name ?? "Actor", signer: selectedSigner?.name ?? "Signer", verification: "pin + signature", absenceType: selectedAction === "absent" ? absenceLabel(absenceType) : undefined });
       setStep("confirm");
       const response = await mobileApi.tabletBootstrap(mode);
       setData(response);
@@ -293,7 +290,7 @@ export default function Kiosk() {
     setSelectedAction("in");
     setSigners([]);
     setSelectedSignerKey("");
-    setAssistingStaffId("");
+    setPinVerificationId(undefined);
     setSignatureName("");
     setAbsenceType("no_show");
     setAbsenceReason("");
@@ -316,20 +313,11 @@ export default function Kiosk() {
   const isNarrow = width < 520;
   const horizontalPadding = isNarrow ? 12 : isCompact ? 16 : 20;
   const contentWidth = Math.min(Math.max(width - (horizontalPadding * 2), 340), isCompact ? 860 : 1080);
-  const modeLabel = mode === "guardian" ? "Parent / Guardian Mode" : mode === "staff" ? "Staff Mode" : "Admin Mode";
-  const credentialPlaceholder = mode === "guardian" ? "Password or PIN" : mode === "staff" ? "Staff PIN" : "Admin/manager PIN";
-  const emailPlaceholder = mode === "guardian" ? "Parent/guardian email" : mode === "staff" ? "Staff email" : "Admin or manager email";
-  const unlockButton = mode === "guardian" ? "Continue as parent/guardian" : mode === "staff" ? "Continue as staff" : "Unlock admin mode";
-  const visibleActions = (mode === "guardian" ? ["in", "out", "early"] : ["in", "out", "absent", "early"]) as Action[];
-  const verificationOptions = mode === "guardian"
-    ? [
-        ["digital_signature", "Drawn signature", "Capture typed name and drawn signature."]
-      ]
-    : [
-        ["secure_login", "Secure login", "Use the active tablet session."],
-        ["pin", "PIN verification", "Confirm account PIN before saving."],
-        ["digital_signature", "Drawn signature", "Capture typed name and drawn signature."]
-      ];
+  const modeLabel = mode === "staff" ? "Staff Mode" : "Admin Mode";
+  const credentialPlaceholder = mode === "staff" ? "Staff PIN" : "Admin/manager PIN or password";
+  const emailPlaceholder = mode === "staff" ? "Staff email" : "Admin or manager email";
+  const unlockButton = mode === "staff" ? "Continue as staff" : "Unlock admin mode";
+  const visibleActions = ["in", "out", "absent", "early"] as Action[];
 
   return (
     <SafeAreaView edges={["top", "bottom", "left", "right"]} style={styles.safeArea}>
@@ -350,11 +338,11 @@ export default function Kiosk() {
           <View style={styles.panel}>
             {!unlocked ? (
               <View style={styles.unlock}>
-                <Text style={[styles.stepTitle, { fontSize: isCompact ? 28 : 34 }]}>Choose mode</Text>
+                <Text style={[styles.stepTitle, { fontSize: isCompact ? 28 : 34 }]}>Unlock provider tablet</Text>
+                <Text style={styles.detail}>Staff, teachers, owners, or admins open the tablet. Parents and guardians are selected later as signers and verify with their tablet PIN.</Text>
                 <View style={styles.grid}>
-                  <Tile icon="people" active={mode === "guardian"} title="Parent / Guardian" detail="Linked children only, with drawn signer signature." onPress={() => { setMode("guardian"); setSelectedAction("in"); setVerification("digital_signature"); setPin(""); }} />
-                  <Tile icon="school" active={mode === "staff"} title="Staff" detail="Assigned classroom attendance for teachers and staff." onPress={() => { setMode("staff"); setSelectedAction("in"); setVerification("digital_signature"); setPin(""); }} />
-                  <Tile icon="settings" active={mode === "admin"} title="Admin" detail="Full organization tablet attendance controls." onPress={() => { setMode("admin"); setSelectedAction("in"); setVerification("digital_signature"); setPin(""); }} />
+                  <Tile icon="school" active={mode === "staff"} title="Staff" detail="Assigned classroom attendance for teachers and staff." onPress={() => { setMode("staff"); setSelectedAction("in"); setPin(""); }} />
+                  <Tile icon="settings" active={mode === "admin"} title="Admin" detail="Full organization tablet attendance controls." onPress={() => { setMode("admin"); setSelectedAction("in"); setPin(""); }} />
                 </View>
                 <Text style={styles.unlockedText}>{modeLabel}</Text>
                 <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder={emailPlaceholder} autoCapitalize="none" keyboardType="email-address" />
@@ -403,35 +391,30 @@ export default function Kiosk() {
             <View style={styles.grid}>
               {visibleActions.map((action) => <Tile key={action} color={actionTone[action]} active={selectedAction === action} title={actionLabels[action]} detail={action === "early" ? "Pickup before scheduled time." : action === "absent" ? "Record absence type and notes." : "Attendance operation."} onPress={() => setSelectedAction(action)} />)}
             </View>
-            <Button onPress={() => setStep(selectedAction === "absent" && mode !== "staff" ? "verify" : "signer")}>Continue</Button>
+            <Button onPress={() => setStep("signer")}>Continue</Button>
           </StepPanel>
         ) : null}
 
         {step === "signer" ? (
           <StepPanel title="Select signer">
             <View style={styles.grid}>
-              {mode === "staff"
-                ? (data?.staff ?? []).filter((staff) => staff.status === "active").map((staff) => <Tile key={staff.id} active={assistingStaffId === String(staff.id)} title={staff.name} detail={`${staff.title ?? staff.role} - ${staff.classroom ?? "All classrooms"}`} onPress={() => chooseAssistingStaff(staff)} />)
-                : signers.map((signer) => <Tile key={`${signer.type}:${signer.id}`} active={selectedSignerKey === `${signer.type}:${signer.id}`} title={signer.name} detail={`${signer.relationship ?? signer.type} - ${signer.can_pickup ? "Authorized" : "Blocked"}`} onPress={() => chooseSigner(`${signer.type}:${signer.id}`)} blocked={!signer.can_pickup} />)}
-              {mode === "admin" ? <Tile active={selectedSignerKey === "staff:admin"} title="Admin/manager assisted" detail="Unlocked admin or manager records this action." onPress={() => { setSelectedSignerKey("staff:admin"); setSignatureName(unlockedUser?.name ?? "Admin-assisted"); }} /> : null}
+              {signers.map((signer) => <Tile key={`${signer.type}:${signer.id}`} active={selectedSignerKey === `${signer.type}:${signer.id}`} title={signer.name} detail={`${signer.relationship ?? signer.type} - ${signer.pin_configured ? "PIN configured" : "PIN missing"}`} onPress={() => chooseSigner(`${signer.type}:${signer.id}`)} blocked={!signer.can_pickup} />)}
             </View>
-            <Button onPress={() => selectedSignerKey ? setStep("verify") : Alert.alert("Choose signer", mode === "staff" ? "Select the assisting staff member first." : "Select an authorized signer first.")}>Continue</Button>
+            <Button onPress={() => selectedSignerKey ? setStep("verify") : Alert.alert("Choose signer", "Select an authorized signer first.")}>Continue</Button>
           </StepPanel>
         ) : null}
 
         {step === "verify" ? (
-          <StepPanel title="Verification">
-            <View style={styles.grid}>
-              {verificationOptions.map(([value, title, detail]) => <Tile key={value} active={verification === value} title={title} detail={detail} onPress={() => setVerification(value as typeof verification)} />)}
-            </View>
-            {verification === "pin" ? <TextInput style={styles.input} value={pin} onChangeText={setPin} placeholder="Staff PIN" secureTextEntry keyboardType="number-pad" /> : null}
+          <StepPanel title="Enter signer PIN">
+            <Text style={styles.detail}>{selectedSigner?.name ?? "Selected signer"} must enter their tablet PIN before signature capture.</Text>
+            <TextInput style={styles.input} value={pin} onChangeText={setPin} placeholder="Signer PIN" secureTextEntry keyboardType="number-pad" />
             {selectedAction === "absent" ? <View style={styles.absenceBox}>
               <Text style={styles.tileTitle}>Absence type</Text>
               <View style={styles.grid}>{absenceTypes.map(([value, label]) => <Tile key={value} active={absenceType === value} title={label} detail="Save this type on the absence record." onPress={() => setAbsenceType(value)} />)}</View>
               <TextInput style={styles.input} value={absenceReason} onChangeText={setAbsenceReason} placeholder="Reason, e.g. parent reported child is sick" />
               <TextInput style={[styles.input, styles.notesInput]} value={absenceNotes} onChangeText={setAbsenceNotes} placeholder="Optional notes" multiline />
             </View> : null}
-            <Button onPress={() => selectedAction === "absent" ? submitAttendance() : setStep("signature")}>{selectedAction === "absent" ? "Submit absence" : "Continue"}</Button>
+            <Button onPress={verifySelectedSignerPin}>{saving ? "Verifying..." : "Verify PIN and continue"}</Button>
           </StepPanel>
         ) : null}
 

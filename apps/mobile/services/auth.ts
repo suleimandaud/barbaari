@@ -50,12 +50,12 @@ export async function loginTabletWithPin(email: string, pin: string) {
   return me as MobileUser;
 }
 
-export async function unlockTablet(mode: "guardian" | "staff" | "admin", email: string, credential: string) {
+export async function unlockTablet(mode: "staff" | "admin", email: string, credential: string) {
   const response = await authApi.tabletUnlock({
     mode,
     email,
     pin: mode === "staff" || (mode === "admin" && /^\d{4,8}$/.test(credential)) ? credential : undefined,
-    password_or_pin: mode === "guardian" || mode === "admin" ? credential : undefined,
+    password_or_pin: mode === "admin" ? credential : undefined,
     purpose: `tablet_${mode}`
   });
   await SecureStore.setItemAsync(TOKEN_KEY, response.token);

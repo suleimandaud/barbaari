@@ -15,11 +15,9 @@ export function GuardiansPage() {
     return { guardians: guardians.guardians, children: children.children };
   }, []);
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [relationship, setRelationship] = useState("");
   const [createChildId, setCreateChildId] = useState("");
-  const [sendInvite, setSendInvite] = useState(true);
   const [pin, setPin] = useState("");
   const [linkChildId, setLinkChildId] = useState("");
   const [linkGuardianId, setLinkGuardianId] = useState("");
@@ -45,15 +43,13 @@ export function GuardiansPage() {
   async function createGuardian(event: FormEvent) {
     event.preventDefault();
     await runAction(async () => {
-      await guardiansApi.create({ name, email: email || undefined, phone, relationship, can_pickup: true, child_id: createChildId || undefined, send_invite: sendInvite, pin: pin || undefined });
+      await guardiansApi.create({ name, phone, relationship, can_pickup: true, child_id: createChildId || undefined, pin: pin || undefined });
       setName("");
-      setEmail("");
       setPhone("");
       setRelationship("");
       setCreateChildId("");
       setPin("");
-      setSendInvite(true);
-    }, email && sendInvite ? "Guardian created and invitation email queued." : "Guardian created.");
+    }, "Guardian created.");
   }
 
   async function linkGuardian(event: FormEvent) {
@@ -102,13 +98,11 @@ export function GuardiansPage() {
       <Panel title="Create guardian">
         <form className="form-grid" onSubmit={createGuardian}>
           <label className="field-stack"><span>Guardian name</span><input value={name} onChange={(event) => setName(event.target.value)} required /></label>
-          <label className="field-stack"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
           <label className="field-stack"><span>Phone</span><input value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
           <label className="field-stack"><span>Relationship</span><input value={relationship} onChange={(event) => setRelationship(event.target.value)} /></label>
           <label className="field-stack"><span>Tablet PIN (optional)</span><input type="password" inputMode="numeric" value={pin} onChange={(event) => setPin(event.target.value)} placeholder="4-8 digits" /></label>
           <div className="full"><ChildSelect children={data?.children ?? []} value={createChildId} onChange={setCreateChildId} label="Link child now" placeholder="No child selected" /></div>
-          <label className="check-row full"><input type="checkbox" checked={sendInvite} onChange={(event) => setSendInvite(event.target.checked)} /> <span>Queue invite email so guardian creates their login password</span></label>
-          <p className="muted full">Login passwords are created from invite links. Tablet PINs are used only for attendance kiosk verification.</p>
+          <p className="muted full">Tablet PINs are used for attendance kiosk verification.</p>
           <button className="primary" disabled={saving}>{saving ? "Saving..." : "Create guardian"}</button>
         </form>
       </Panel>
@@ -123,13 +117,12 @@ export function GuardiansPage() {
         <DataTable rows={data?.guardians ?? []} columns={[
           { header: "Guardian", render: (row: any) => <><strong>{row.name}</strong><br /><small>{guardianLabel(row)}</small></> },
           { header: "Relationship", render: (row: any) => row.relationship ?? "Not set" },
-          { header: "Email", render: (row: any) => row.email ?? "Not set" },
           { header: "Phone", render: (row: any) => row.phone ?? "Not set" },
           { header: "Children", render: (row: any) => row.children?.length ? row.children.map((child: any) => `${child.name ?? `${child.first_name} ${child.last_name}`} (${childCode(child)})`).join(", ") : "Not linked" },
           { header: "Pickup", render: (row: any) => <Badge tone={row.can_pickup ? "success" : "neutral"}>{row.can_pickup ? "Authorized" : "Not authorized"}</Badge> },
-          { header: "Account", render: (row: any) => <><Badge tone={row.status === "active" && row.account_status === "active" ? "success" : row.status === "pending_invite" || row.account_status === "pending_invite" ? "warning" : "neutral"}>{String(row.status ?? "active").replace(/_/g, " ")}</Badge><br /><small>{row.invite_status === "accepted" ? "Invite accepted" : row.invite_status === "pending" ? "Invite pending" : "Invite not sent"}</small></> },
+          { header: "Status", render: (row: any) => <Badge tone={row.status === "active" ? "success" : row.status === "inactive" ? "neutral" : "warning"}>{String(row.status ?? "active").replace(/_/g, " ")}</Badge> },
           { header: "PIN", render: (row: any) => <Badge tone={row.pin_configured ? "success" : "warning"}>{row.pin_configured ? "PIN configured" : "PIN missing"}</Badge> },
-          { header: "Actions", render: (row: any) => <div className="row-actions"><button className="secondary" disabled={!row.email} onClick={() => runAction(() => guardiansApi.sendInvite(row.id).then(() => undefined), "Guardian invitation email queued.")}>Send invite</button><button className="secondary" disabled={!row.user_id} onClick={() => runAction(() => guardiansApi.sendPasswordReset(row.id).then(() => undefined), "Guardian reset email queued.")}>Send reset email</button><button className="secondary" onClick={() => resetGuardianPin(row)}>Reset PIN</button></div> }
+          { header: "Actions", render: (row: any) => <div className="row-actions"><button className="secondary" onClick={() => resetGuardianPin(row)}>Reset PIN</button></div> }
         ]} />
       )}
     </section>

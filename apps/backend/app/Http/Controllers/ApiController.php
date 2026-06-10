@@ -380,42 +380,20 @@ class ApiController extends Controller
             'can_pickup' => ['sometimes', 'boolean'],
             'child_id' => ['nullable', 'exists:children,id'],
             'send_invite' => ['sometimes', 'boolean'],
-            'pin' => ['nullable', 'string', 'min:4', 'max:8'],
+            'pin' => ['nullable', 'regex:/^\d{4,8}$/'],
         ]);
         $orgId = $this->orgId($request);
         $child = ! empty($data['child_id']) ? Child::where('organization_id', $orgId)->findOrFail($data['child_id']) : null;
-        $user = null;
-
-        if (! empty($data['email'])) {
-            $existingUser = User::where('email', $data['email'])->first();
-            abort_if($existingUser && (int) $existingUser->organization_id !== $orgId, 422, 'A user with this email already belongs to another organization.');
-            abort_if($existingUser && ! in_array($existingUser->role, ['parent'], true), 422, 'This email is already used by a non-guardian account.');
-            $user = $existingUser ?: User::create([
-                'organization_id' => $orgId,
-                'name' => $data['name'],
-                'email' => $data['email'],
-                'phone' => $data['phone'] ?? null,
-                'role' => 'parent',
-                'status' => $request->boolean('send_invite', true) ? 'pending_invite' : 'active',
-                'password' => Hash::make(Str::random(40)),
-                'pin_hash' => ! empty($data['pin']) ? Hash::make($data['pin']) : null,
-                'email_verified_at' => $request->boolean('send_invite', true) ? null : now(),
-            ]);
-            $this->syncNamedRole($user, 'parent');
-            if (! empty($data['pin']) && $existingUser) {
-                $user->update(['pin_hash' => Hash::make($data['pin']), 'pin_failed_attempts' => 0, 'pin_locked_until' => null]);
-            }
-        }
 
         $guardian = Guardian::create([
             'organization_id' => $orgId,
-            'user_id' => $user?->id,
+            'user_id' => null,
             'name' => $data['name'],
-            'email' => $data['email'] ?? null,
+            'email' => null,
             'phone' => $data['phone'] ?? null,
             'relationship' => $data['relationship'] ?? null,
             'can_pickup' => $data['can_pickup'] ?? true,
-            'status' => $user && $user->status === 'pending_invite' ? 'pending_invite' : 'active',
+            'status' => 'active',
             'pin_hash' => ! empty($data['pin']) ? Hash::make($data['pin']) : null,
         ]);
 
@@ -423,22 +401,12 @@ class ApiController extends Controller
             $child->guardians()->syncWithoutDetaching([$guardian->id => ['primary_contact' => false, 'pickup_authorized' => $guardian->can_pickup]]);
         }
 
-        $invitation = null;
-        if ($user && $request->boolean('send_invite', true)) {
-            $invitation = $this->createOrganizationInvitation($request, Organization::findOrFail($orgId), [
-                'name' => $user->name,
-                'email' => $user->email,
-                'role' => 'parent',
-                'user_id' => $user->id,
-            ]);
-        }
-
-        $this->platformAudit($request, 'guardian.created', $guardian, ['child_id' => $child?->id, 'invite_queued' => (bool) $invitation]);
+        $this->platformAudit($request, 'guardian.created', $guardian, ['child_id' => $child?->id]);
 
         return response()->json([
-            'guardian' => $guardian->fresh('children', 'user'),
-            'invitation' => $invitation ? $this->invitationPayload($invitation) : null,
-            'message' => $invitation ? 'Guardian created and invitation email queued.' : 'Guardian created.',
+            'guardian' => $guardian->fresh('children'),
+            'invitation' => null,
+            'message' => 'Guardian created.',
         ], 201);
     }
 
@@ -452,14 +420,12 @@ class ApiController extends Controller
             'relationship' => ['nullable', 'string', 'max:120'],
             'can_pickup' => ['sometimes', 'boolean'],
             'status' => ['sometimes', 'in:active,pending_invite,inactive'],
-            'pin' => ['nullable', 'string', 'min:4', 'max:8'],
+            'pin' => ['nullable', 'regex:/^\d{4,8}$/'],
         ]);
         $updates = collect($data)->except('pin')->all();
+        unset($updates['email']);
         if (! empty($data['pin'])) {
             $updates['pin_hash'] = Hash::make($data['pin']);
-            if ($guardian->user) {
-                $guardian->user->update(['pin_hash' => $updates['pin_hash'], 'pin_failed_attempts' => 0, 'pin_locked_until' => null]);
-            }
         }
         $guardian->update($updates);
 
@@ -469,66 +435,32 @@ class ApiController extends Controller
     public function sendGuardianInvite(Request $request, Guardian $guardian)
     {
         abort_unless($guardian->organization_id === $this->orgId($request), 403);
-        abort_unless($guardian->email, 422, 'Add an email address before sending a guardian invitation.');
-        $user = $guardian->user ?: User::where('email', $guardian->email)->where('organization_id', $guardian->organization_id)->first();
-        if (! $user) {
-            $user = User::create([
-                'organization_id' => $guardian->organization_id,
-                'name' => $guardian->name,
-                'email' => $guardian->email,
-                'phone' => $guardian->phone,
-                'role' => 'parent',
-                'status' => 'pending_invite',
-                'password' => Hash::make(Str::random(40)),
-                'pin_hash' => $guardian->pin_hash,
-            ]);
-            $this->syncNamedRole($user, 'parent');
-        }
-        if ($user->status !== 'active') {
-            $user->update(['status' => 'pending_invite', 'email_verified_at' => null]);
-        }
-        $guardian->update(['user_id' => $user->id, 'status' => $user->status === 'active' ? 'active' : 'pending_invite']);
-
-        $invitation = $this->createOrganizationInvitation($request, Organization::findOrFail($guardian->organization_id), [
-            'name' => $user->name,
-            'email' => $user->email,
-            'role' => 'parent',
-            'user_id' => $user->id,
-        ]);
-
-        return response()->json(['invitation' => $this->invitationPayload($invitation), 'message' => 'Guardian invitation email queued.']);
+        return response()->json(['message' => 'Guardian email invitations are no longer used. Guardians sign attendance with their tablet PIN.'], 410);
     }
 
     public function sendGuardianPasswordReset(Request $request, Guardian $guardian)
     {
         abort_unless($guardian->organization_id === $this->orgId($request), 403);
-        abort_unless($guardian->user, 422, 'This guardian has not accepted an invitation yet. Send an invitation first.');
-        abort_unless($guardian->user->status === 'active', 422, 'This guardian account is not active yet. Please resend the invitation.');
-        $status = $this->queuePasswordReset($guardian->user);
-
-        return response()->json(['message' => $status === Password::RESET_LINK_SENT ? 'Guardian reset email queued.' : 'Guardian reset email could not be queued.', 'status' => $status], $status === Password::RESET_LINK_SENT ? 200 : 422);
+        return response()->json(['message' => 'Guardian password reset is no longer used. Guardians sign attendance with their tablet PIN.'], 410);
     }
 
     public function resetGuardianPin(Request $request, Guardian $guardian)
     {
         abort_unless($guardian->organization_id === $this->orgId($request), 403);
-        $data = $request->validate(['pin' => ['required', 'string', 'min:4', 'max:8']]);
+        $data = $request->validate(['pin' => ['required', 'regex:/^\d{4,8}$/']]);
         $hash = Hash::make($data['pin']);
         $guardian->update(['pin_hash' => $hash]);
-        if ($guardian->user) {
-            $guardian->user->update(['pin_hash' => $hash, 'pin_failed_attempts' => 0, 'pin_locked_until' => null]);
-        }
         $this->platformAudit($request, 'guardian.pin_reset', $guardian);
 
         $fresh = $guardian->fresh('user', 'children');
-        $ready = $fresh->status === 'active' && $fresh->user?->status === 'active';
+        $ready = $fresh->status === 'active' && (bool) $fresh->pin_hash;
 
         return response()->json([
             'guardian' => $this->guardianPayload($fresh),
             'tablet_unlock_ready' => $ready,
             'message' => $ready
-                ? 'Guardian tablet PIN reset. Tablet unlock is ready.'
-                : 'Guardian tablet PIN reset. Guardian must accept invite before tablet unlock.',
+                ? 'Guardian tablet PIN reset. Tablet signer verification is ready.'
+                : 'Guardian tablet PIN reset.',
         ]);
     }
 
@@ -804,19 +736,19 @@ class ApiController extends Controller
 
         $child = Child::with('guardians', 'classroom')->findOrFail($data['child_id']);
         $this->authorizeTabletChild($request, $child);
-        [$signerUser, $signer] = $this->resolveTabletSigner($request, $child, $data['signer_type'], (int) $data['signer_id']);
+        [$signerUser, $signer, $pinHash, $purpose] = $this->resolveTabletSigner($request, $child, $data['signer_type'], (int) $data['signer_id']);
 
-        if (! $signerUser?->pin_hash) {
-            $this->recordSignerPinLog($request, $signerUser, $signer['email'] ?? null, false, 'pin_not_set');
+        if (! $pinHash) {
+            $this->recordSignerPinLog($request, $signerUser, $signer['email'] ?? null, false, 'pin_not_set', $purpose);
             throw ValidationException::withMessages(['pin' => ['This signer does not have a tablet PIN yet. Please set a PIN first.']]);
         }
 
-        if (! Hash::check($data['pin'], $signerUser->pin_hash)) {
-            $this->recordSignerPinLog($request, $signerUser, $signer['email'] ?? null, false, 'invalid_pin');
+        if (! Hash::check($data['pin'], $pinHash)) {
+            $this->recordSignerPinLog($request, $signerUser, $signer['email'] ?? null, false, 'invalid_pin', $purpose);
             throw ValidationException::withMessages(['pin' => ['Incorrect signer PIN.']]);
         }
 
-        $log = $this->recordSignerPinLog($request, $signerUser, $signer['email'] ?? null, true);
+        $log = $this->recordSignerPinLog($request, $signerUser, $signer['email'] ?? null, true, null, $purpose);
 
         return response()->json([
             'message' => 'Signer PIN verified.',
@@ -828,7 +760,7 @@ class ApiController extends Controller
 
     private function pickupSignersResponse(Child $child)
     {
-        $child->load('guardians.user');
+        $child->load('guardians');
 
         $guardians = $child->guardians->map(fn ($guardian) => [
             'id' => (string) $guardian->id,
@@ -836,8 +768,8 @@ class ApiController extends Controller
             'name' => $guardian->name,
             'relationship' => $guardian->relationship,
             'phone' => $guardian->phone,
-            'email' => $guardian->email,
-            'pin_configured' => (bool) $guardian->user?->pin_hash,
+            'email' => null,
+            'pin_configured' => (bool) $guardian->pin_hash,
             'can_pickup' => (bool) ($guardian->pivot?->pickup_authorized ?? $guardian->can_pickup),
         ])->values();
 
@@ -863,7 +795,7 @@ class ApiController extends Controller
     {
         $organization = $request->user()->organization;
         $facilityType = $organization?->facility_type ?? 'center_daycare';
-        $child->load('guardians.user', 'classroom');
+        $child->load('guardians', 'classroom');
 
         $guardians = $child->guardians
             ->filter(fn (Guardian $guardian) => $guardian->status === 'active')
@@ -872,8 +804,8 @@ class ApiController extends Controller
                 'type' => 'guardian',
                 'name' => $guardian->name,
                 'relationship' => $guardian->relationship ?: 'Guardian',
-                'email' => $guardian->email,
-                'pin_configured' => (bool) $guardian->user?->pin_hash,
+                'email' => null,
+                'pin_configured' => (bool) $guardian->pin_hash,
                 'can_pickup' => (bool) ($guardian->pivot?->pickup_authorized ?? $guardian->can_pickup),
             ])
             ->values();
@@ -918,22 +850,19 @@ class ApiController extends Controller
     {
         if ($type === 'guardian') {
             $guardian = $child->guardians()
-                ->with('user')
                 ->where('guardians.id', $id)
                 ->where('guardians.status', 'active')
                 ->first();
             abort_unless($guardian, 403, 'This guardian is not linked to the selected child.');
-            $user = $guardian->user ?: User::where('organization_id', $this->orgId($request))->where('email', $guardian->email)->where('role', 'parent')->first();
-            abort_unless($user?->status === 'active', 403, 'This guardian account is not active yet. Please accept the invite first.');
 
-            return [$user, [
+            return [null, [
                 'id' => (string) $guardian->id,
                 'type' => 'guardian',
                 'name' => $guardian->name,
                 'relationship' => $guardian->relationship ?: 'Guardian',
-                'email' => $guardian->email,
-                'pin_configured' => (bool) $user->pin_hash,
-            ]];
+                'email' => null,
+                'pin_configured' => (bool) $guardian->pin_hash,
+            ], $guardian->pin_hash, 'tablet_signer:guardian:'.$guardian->id];
         }
 
         $user = User::with('staffProfile')->where('organization_id', $this->orgId($request))->where('id', $id)->where('status', 'active')->first();
@@ -954,17 +883,17 @@ class ApiController extends Controller
             'relationship' => $type === 'staff' ? ($user->role === 'teacher' ? 'Classroom teacher' : 'Classroom staff') : ($user->role === 'manager' ? 'Manager / owner' : 'Owner / admin'),
             'email' => $user->email,
             'pin_configured' => (bool) $user->pin_hash,
-        ]];
+        ], $user->pin_hash, 'tablet_signer:user:'.$user->id];
     }
 
-    private function recordSignerPinLog(Request $request, ?User $user, ?string $email, bool $success, ?string $failureReason = null): PinVerificationLog
+    private function recordSignerPinLog(Request $request, ?User $user, ?string $email, bool $success, ?string $failureReason = null, string $purpose = 'tablet_signer'): PinVerificationLog
     {
         return PinVerificationLog::create([
             'user_id' => $user?->id,
             'organization_id' => $user?->organization_id ?? $this->orgId($request),
             'email' => $user?->email ?? $email,
             'success' => $success,
-            'purpose' => 'tablet_signer',
+            'purpose' => $purpose,
             'failure_reason' => $failureReason,
             'ip_address' => $request->ip(),
             'verified_at' => $success ? now() : null,
@@ -3233,16 +3162,11 @@ class ApiController extends Controller
             ->where('verified_at', '>=', now()->subMinutes(10));
 
         if (in_array($data['signer_type'] ?? null, ['guardian', 'parent'], true) && ! empty($data['guardian_id'])) {
-            $guardian = Guardian::with('user')->find($data['guardian_id']);
-            if ($guardian?->user_id) {
-                $query->where('user_id', $guardian->user_id);
-            } else {
-                $query->where('email', $guardian?->email);
-            }
+            $query->where('purpose', 'tablet_signer:guardian:'.$data['guardian_id']);
         } elseif (($data['signer_type'] ?? null) === 'staff' && ! empty($data['assisting_staff_id'])) {
-            $query->where('user_id', $data['assisting_staff_id']);
+            $query->where('purpose', 'tablet_signer:user:'.$data['assisting_staff_id']);
         } else {
-            $query->where('user_id', $request->user()->id);
+            $query->where('purpose', 'tablet_signer:user:'.$request->user()->id);
         }
 
         $log = $query->first();
@@ -3267,7 +3191,7 @@ class ApiController extends Controller
             $guardian = $child->guardians()->where('guardians.id', $data['guardian_id'])->first();
             abort_unless($guardian, 403, 'This guardian is not linked to the selected child.');
 
-            if ($user->role === 'parent') {
+            if ($user->role === 'parent' && $guardian->user_id) {
                 abort_unless((int) $guardian->user_id === (int) $user->id, 403, 'Parents can only sign for their own linked children.');
             }
 
@@ -3348,24 +3272,23 @@ class ApiController extends Controller
 
     private function guardianPayload(Guardian $guardian): array
     {
-        $userStatus = $guardian->user?->status;
-        $guardianStatus = $guardian->status ?? ($userStatus === 'active' ? 'active' : 'pending_invite');
-        $pinConfigured = (bool) ($guardian->pin_hash || $guardian->user?->pin_hash);
+        $guardianStatus = $guardian->status ?? 'active';
+        $pinConfigured = (bool) $guardian->pin_hash;
 
         return [
             'id' => (string) $guardian->id,
             'organization_id' => $guardian->organization_id,
             'user_id' => $guardian->user_id,
             'name' => $guardian->name,
-            'email' => $guardian->email,
+            'email' => null,
             'phone' => $guardian->phone,
             'relationship' => $guardian->relationship,
             'can_pickup' => (bool) $guardian->can_pickup,
             'status' => $guardianStatus,
-            'account_status' => $userStatus ?? 'not_invited',
-            'invite_status' => $userStatus === 'active' ? 'accepted' : ($userStatus === 'pending_invite' ? 'pending' : 'not_sent'),
+            'account_status' => 'not_required',
+            'invite_status' => 'not_required',
             'pin_configured' => $pinConfigured,
-            'tablet_unlock_ready' => $guardianStatus === 'active' && $userStatus === 'active' && $pinConfigured,
+            'tablet_unlock_ready' => $guardianStatus === 'active' && $pinConfigured,
             'children' => $guardian->children?->map(fn (Child $child) => [
                 'id' => (string) $child->id,
                 'name' => trim($child->first_name.' '.$child->last_name),
@@ -3483,9 +3406,7 @@ class ApiController extends Controller
         $query = Child::query()->where('organization_id', $this->orgId($request));
 
         if ($mode === 'guardian') {
-            abort_unless($user->role === 'parent', 403, 'Parent/guardian mode requires a parent or guardian account.');
-            $guardianIds = Guardian::where('user_id', $user->id)->where('status', 'active')->pluck('id');
-            $query->whereHas('guardians', fn ($childGuardians) => $childGuardians->whereIn('guardians.id', $guardianIds));
+            abort(403, 'Parents and guardians do not unlock tablet mode. Ask provider staff to open the tablet and select them as signers.');
         } elseif ($mode === 'staff') {
             abort_unless(in_array($user->role, $this->staffRoles, true), 403, 'Staff mode requires a staff or teacher account.');
             if (($user->organization?->facility_type ?? 'center_daycare') === 'center_daycare') {
@@ -3524,7 +3445,7 @@ class ApiController extends Controller
     {
         $user = $request->user();
         if ($mode === 'guardian') {
-            return 'Parent / Guardian Mode: linked children only';
+            return 'Guardian signer scope: provider tablet unlock required';
         }
         if ($mode === 'staff') {
             return 'Staff Mode: assigned classroom only'.($user->staffProfile?->classroom?->name ? ' - '.$user->staffProfile->classroom->name : '');

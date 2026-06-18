@@ -70,7 +70,7 @@ export function RegistrationApplicationsPage() {
     try {
       const response = await superAdminApi.approveRegistrationApplication(selected.id, { pricing_plan_id: planId, billing_cycle: billingCycle, review_notes: reviewNotes || undefined });
       setApprovalResult(response);
-      setSuccess("Application approved, organization created, and owner invite queued.");
+      setSuccess("Application approved. Owner can now log in with the registration email and password.");
       setSelected(null);
       await reload();
     } catch (err) {
@@ -99,7 +99,7 @@ export function RegistrationApplicationsPage() {
         <DataTable rows={rows} columns={[
           { header: "Provider", render: (row: any) => <><strong>{row.business_name}</strong><br /><small>{row.owner_name} - {row.owner_email}</small></> },
           { header: "Facility type", render: (row: any) => <Badge>{facilityLabel(row.facility_type)}</Badge> },
-          { header: "Location", render: (row: any) => <>{[row.city, row.state, row.country].filter(Boolean).join(", ") || "Not provided"}{row.facility_type === "family_child_care" ? <><br /><small>{row.latitude && row.longitude ? `${row.latitude}, ${row.longitude}` : "Home location not provided"}</small></> : null}</> },
+          { header: "Location", render: (row: any) => <>{row.standardized_address || [row.city, row.state, row.country].filter(Boolean).join(", ") || "Not provided"}<br /><small>{row.address_validated_at ? "Address validated" : "Address not validated"}</small></> },
           { header: "Plan", render: (row: any) => <><strong>{row.pricing_plan?.name ?? "Needs plan"}</strong><br /><small>{row.pricing_plan ? money(row.pricing_plan.monthly_price) : "No price"} / {row.billing_cycle}</small></> },
           { header: "Status", render: (row: any) => <Badge tone={statusTone(row.status)}>{titleize(row.status)}</Badge> },
           { header: "Submitted", render: (row: any) => row.created_at ? new Date(row.created_at).toLocaleDateString() : "—" },
@@ -116,12 +116,13 @@ export function RegistrationApplicationsPage() {
                 <article className="ops"><span>Owner</span><strong>{selected.owner_name}</strong></article>
                 <article className="ops"><span>Email</span><strong>{selected.owner_email}</strong></article>
                 <article className="ops"><span>Phone</span><strong>{selected.phone ?? "—"}</strong></article>
-                <article className="ops"><span>Location</span><strong>{[selected.city, selected.state, selected.country].filter(Boolean).join(", ") || "—"}</strong></article>
-                {selected.facility_type === "family_child_care" ? <>
-                  <article className="ops"><span>Latitude</span><strong>{selected.latitude ?? "Not provided"}</strong></article>
-                  <article className="ops"><span>Longitude</span><strong>{selected.longitude ?? "Not provided"}</strong></article>
-                  <article className="ops"><span>Radius</span><strong>{selected.attendance_radius_meters ?? 100} meters</strong></article>
-                </> : null}
+                <article className="ops"><span>Standardized address</span><strong>{selected.standardized_address || selected.address || "—"}</strong></article>
+                <article className="ops"><span>City</span><strong>{selected.city || "—"}</strong></article>
+                <article className="ops"><span>State</span><strong>{selected.state || "—"}</strong></article>
+                <article className="ops"><span>ZIP Code</span><strong>{selected.postal_code || "—"}</strong></article>
+                <article className="ops"><span>Radius</span><strong>{selected.attendance_radius_meters ?? 100} meters</strong></article>
+                <article className="ops"><span>Coordinates</span><strong>{selected.latitude && selected.longitude ? "Location coordinates saved" : "Not geocoded"}</strong></article>
+                <article className="ops"><span>Geocoder</span><strong>{selected.geocoding_provider ?? "—"}</strong></article>
                 <article className="ops"><span>License</span><strong>{selected.license_number ?? "Not provided"}</strong></article>
                 <article className="ops"><span>Status</span><strong>{titleize(selected.status)}</strong></article>
               </div>
@@ -150,9 +151,9 @@ export function RegistrationApplicationsPage() {
             <Panel title="Created organization">
               <p><strong>{approvalResult.organization?.name}</strong> is ready for owner setup.</p>
               <Badge tone="warning">{titleize(approvalResult.subscription?.status ?? "pending_activation")}</Badge>
-              <p className="muted">{approvalResult.invite_note ?? "Owner invitation email has been queued."}</p>
+              <p className="muted">{approvalResult.invite_note ?? "Owner can now log in using the email and password created during registration."}</p>
             </Panel>
-            <Panel title="Manual staging invite link">
+            {(approvalResult.invitations ?? []).length ? <Panel title="Manual staging invite link">
               {(approvalResult.invitations ?? []).map((invite: any) => <div className="log" key={invite.id}>
                 <strong>{invite.name} - {invite.email}</strong>
                 <span>Copy this only if email delivery is not available in staging.</span>
@@ -162,7 +163,7 @@ export function RegistrationApplicationsPage() {
                 </div>
                 <a className="truncate" href={invite.invite_url} target="_blank" rel="noopener noreferrer">{invite.invite_url}</a>
               </div>)}
-            </Panel>
+            </Panel> : null}
           </div>
         </Modal>
       ) : null}

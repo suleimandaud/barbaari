@@ -5,6 +5,7 @@ use App\Http\Controllers\AuthController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('public/pricing-plans', [ApiController::class, 'publicPricingPlans']);
+Route::post('public/validate-address', [ApiController::class, 'validatePublicAddress'])->middleware('throttle:6,1');
 Route::post('registration-applications', [ApiController::class, 'createFacilityRegistrationApplication'])->middleware('throttle:10,1');
 
 Route::prefix('auth')->middleware('throttle:auth')->group(function () {

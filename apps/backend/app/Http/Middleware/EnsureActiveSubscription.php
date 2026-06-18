@@ -21,12 +21,38 @@ class EnsureActiveSubscription
             return response()->json(['message' => 'Unauthenticated.'], 401);
         }
 
-        if ($this->subscriptions->isBypassUser($user) || $this->isPaymentGateAllowedPath($request)) {
+        if ($this->subscriptions->isBypassUser($user)) {
             return $next($request);
         }
 
+        if ($user->status === 'pending_approval') {
+            return response()->json(['message' => 'Your application is still pending approval.'], 403);
+        }
+
+        if ($user->status === 'rejected') {
+            return response()->json(['message' => 'Your application was not approved. Please contact support.'], 403);
+        }
+
+        if ($user->status !== 'active') {
+            return response()->json(['message' => 'User is not active.'], 403);
+        }
+
         if (! $user->organization_id) {
+            return response()->json(['message' => 'This account is not linked to an approved provider organization.'], 403);
+        }
+
+        if ($this->isPaymentGateAllowedPath($request)) {
             return $next($request);
+        }
+
+        $organization = $user->organization;
+        if (! $organization || $organization->status !== 'active') {
+            return response()->json([
+                'message' => 'Your organization is approved but requires subscription setup before dashboard access.',
+                'requires_payment' => true,
+                'organization_status' => $organization?->status,
+                'redirect_to' => '/subscription-payment',
+            ], 402);
         }
 
         $gate = $this->subscriptions->getPaymentGateReason($user->organization_id);

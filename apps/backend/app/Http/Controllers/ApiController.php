@@ -39,12 +39,15 @@ use App\Mail\OrganizationInvitationMail;
 use App\Mail\PlatformInvoiceMail;
 use App\Mail\SubscriptionActivatedMail;
 use App\Services\NotificationService;
+use App\Services\GeocodingService;
 use App\Services\StripeService;
 use App\Services\SubscriptionAccessService;
+use App\Services\USPSAddressService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
@@ -62,6 +65,8 @@ class ApiController extends Controller
         private NotificationService $notifications,
         private StripeService $stripe,
         private SubscriptionAccessService $subscriptionAccess,
+        private USPSAddressService $uspsAddress,
+        private GeocodingService $geocoder,
     ) {
     }
 
@@ -99,6 +104,37 @@ class ApiController extends Controller
         return response()->json(['pricing_plans' => $query->orderBy('monthly_price')->get()->map(fn (PricingPlan $plan) => $this->pricingPlanPayload($plan))]);
     }
 
+    public function validatePublicAddress(Request $request)
+    {
+        $data = $request->validate([
+            'address_line1' => ['required', 'string', 'max:255'],
+            'address_line2' => ['nullable', 'string', 'max:255'],
+            'city' => ['required', 'string', 'max:120'],
+            'state' => ['required', 'string', 'size:2'],
+            'postal_code' => ['required', 'string', 'max:20'],
+            'country' => ['nullable', 'string', 'size:2'],
+        ]);
+        $data['country'] = strtoupper($data['country'] ?? 'US');
+        $data['state'] = strtoupper($data['state']);
+
+        $standardized = $this->uspsAddress->validate($data);
+        $coordinates = $this->geocoder->geocode($standardized);
+        $validated = [
+            ...$standardized,
+            ...$coordinates,
+            'address_validated_at' => now()->toISOString(),
+            'geocoded_at' => now()->toISOString(),
+        ];
+        $token = Str::random(48);
+        Cache::put($this->addressValidationCacheKey($token), $validated, now()->addMinutes(30));
+
+        return response()->json([
+            ...$validated,
+            'validation_token' => $token,
+            'message' => 'Address validated. Location will be used for tablet attendance geofence.',
+        ]);
+    }
+
     public function createFacilityRegistrationApplication(Request $request)
     {
         $data = $request->validate([
@@ -107,14 +143,17 @@ class ApiController extends Controller
             'legal_name' => ['nullable', 'string', 'max:255'],
             'owner_name' => ['required', 'string', 'max:255'],
             'owner_email' => ['required', 'email', 'max:255'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
             'phone' => ['nullable', 'string', 'max:80'],
-            'city' => ['nullable', 'string', 'max:120'],
-            'state' => ['nullable', 'string', 'max:120'],
-            'country' => ['nullable', 'string', 'max:120'],
+            'address_validation_token' => ['required', 'string', 'max:100'],
+            'address_line1' => ['required', 'string', 'max:255'],
+            'address_line2' => ['nullable', 'string', 'max:255'],
+            'city' => ['required', 'string', 'max:120'],
+            'state' => ['required', 'string', 'size:2'],
+            'postal_code' => ['required', 'string', 'max:20'],
+            'country' => ['required', 'string', 'size:2'],
             'address' => ['nullable', 'string', 'max:255'],
-            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
-            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
-            'attendance_radius_meters' => ['nullable', 'integer', 'min:25', 'max:5000'],
+            'attendance_radius_meters' => ['required', 'integer', 'min:25', 'max:5000'],
             'timezone' => ['nullable', 'string', 'max:80'],
             'license_number' => ['nullable', 'string', 'max:255'],
             'license_status' => ['nullable', 'in:not_provided,pending,verified,rejected,expired'],
@@ -122,6 +161,21 @@ class ApiController extends Controller
             'billing_cycle' => ['nullable', 'in:monthly,yearly'],
             'notes' => ['nullable', 'string', 'max:3000'],
         ]);
+        $addressValidationCacheKey = $this->addressValidationCacheKey($data['address_validation_token']);
+        $validatedAddress = Cache::get($addressValidationCacheKey);
+        if (! $validatedAddress || ! $this->submittedAddressMatchesValidation($data, $validatedAddress)) {
+            throw ValidationException::withMessages([
+                'address' => ['Please validate the address before submitting the application.'],
+            ]);
+        }
+        if (User::where('email', $data['owner_email'])->exists()) {
+            throw ValidationException::withMessages([
+                'owner_email' => ['An account already exists for this email. Please log in or contact support.'],
+            ]);
+        }
+        $password = $data['password'];
+        unset($data['password'], $data['password_confirmation']);
+        unset($data['address_validation_token']);
 
         if (! empty($data['pricing_plan_id'])) {
             $plan = PricingPlan::findOrFail($data['pricing_plan_id']);
@@ -133,16 +187,36 @@ class ApiController extends Controller
                 'The selected plan is not available for this facility type.'
             );
         }
+        Cache::forget($addressValidationCacheKey);
 
-        $application = FacilityRegistrationApplication::create([
-            ...$data,
-            'billing_cycle' => $data['billing_cycle'] ?? 'monthly',
-            'license_status' => ! empty($data['license_number']) ? ($data['license_status'] ?? 'pending') : ($data['license_status'] ?? 'not_provided'),
-            'status' => 'pending',
-        ]);
+        $application = DB::transaction(function () use ($data, $validatedAddress, $password) {
+            $owner = User::create([
+                'name' => $data['owner_name'],
+                'email' => $data['owner_email'],
+                'phone' => $data['phone'] ?? null,
+                'role' => 'daycare_admin',
+                'status' => 'pending_approval',
+                'organization_id' => null,
+                'password' => Hash::make($password),
+                'email_verified_at' => null,
+            ]);
+            $this->syncNamedRole($owner, 'daycare_admin');
+
+            return FacilityRegistrationApplication::create([
+                ...$data,
+                ...$validatedAddress,
+                'owner_user_id' => $owner->id,
+                'address' => $validatedAddress['standardized_address'],
+                'address_validated_at' => now(),
+                'geocoded_at' => now(),
+                'billing_cycle' => $data['billing_cycle'] ?? 'monthly',
+                'license_status' => ! empty($data['license_number']) ? ($data['license_status'] ?? 'pending') : ($data['license_status'] ?? 'not_provided'),
+                'status' => 'pending',
+            ]);
+        });
 
         return response()->json([
-            'application' => $this->registrationApplicationPayload($application->fresh('pricingPlan')),
+            'application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'ownerUser'])),
             'message' => 'Registration application received. Barbaari will review it before creating the provider workspace.',
         ], 201);
     }
@@ -1940,7 +2014,7 @@ class ApiController extends Controller
     public function platformRegistrationApplications(Request $request)
     {
         $status = $request->string('status')->toString();
-        $query = FacilityRegistrationApplication::with('pricingPlan', 'organization', 'reviewer')->latest();
+        $query = FacilityRegistrationApplication::with('pricingPlan', 'organization', 'reviewer', 'ownerUser')->latest();
         if (in_array($status, ['pending', 'approved', 'rejected', 'follow_up'], true)) {
             $query->where('status', $status);
         }
@@ -1993,7 +2067,7 @@ class ApiController extends Controller
             ]);
 
             return [
-                'application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'organization', 'reviewer'])),
+                'application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'organization', 'reviewer', 'ownerUser'])),
                 ...$organization,
             ];
         });
@@ -2012,7 +2086,8 @@ class ApiController extends Controller
         ]);
         $this->platformAudit($request, 'facility_application.rejected', $application, ['review_notes' => $application->review_notes]);
 
-        return response()->json(['application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'organization', 'reviewer']))]);
+        $application->ownerUser?->update(['status' => 'rejected']);
+        return response()->json(['application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'organization', 'reviewer', 'ownerUser']))]);
     }
 
     public function requestRegistrationApplicationFollowUp(Request $request, FacilityRegistrationApplication $application)
@@ -2026,7 +2101,7 @@ class ApiController extends Controller
         ]);
         $this->platformAudit($request, 'facility_application.follow_up_requested', $application, ['review_notes' => $application->review_notes]);
 
-        return response()->json(['application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'organization', 'reviewer']))]);
+        return response()->json(['application' => $this->registrationApplicationPayload($application->fresh(['pricingPlan', 'organization', 'reviewer', 'ownerUser']))]);
     }
 
     public function createOrganization(Request $request)
@@ -3731,6 +3806,27 @@ class ApiController extends Controller
         ];
     }
 
+    private function addressValidationCacheKey(string $token): string
+    {
+        return 'public_address_validation:'.hash('sha256', $token);
+    }
+
+    private function submittedAddressMatchesValidation(array $submitted, array $validated): bool
+    {
+        foreach (['address_line1', 'city', 'state', 'postal_code'] as $field) {
+            if ($this->normalizeAddressField($submitted[$field] ?? '') !== $this->normalizeAddressField($validated[$field] ?? '')) {
+                return false;
+            }
+        }
+
+        return $this->normalizeAddressField($submitted['address_line2'] ?? '') === $this->normalizeAddressField($validated['address_line2'] ?? '');
+    }
+
+    private function normalizeAddressField(?string $value): string
+    {
+        return Str::upper(preg_replace('/\s+/', ' ', trim((string) $value)));
+    }
+
     private function registrationApplicationPayload(FacilityRegistrationApplication $application): array
     {
         return [
@@ -3741,14 +3837,23 @@ class ApiController extends Controller
             'legal_name' => $application->legal_name,
             'owner_name' => $application->owner_name,
             'owner_email' => $application->owner_email,
+            'owner_user_id' => $application->owner_user_id,
+            'owner_user_status' => $application->ownerUser?->status,
             'phone' => $application->phone,
+            'address_line1' => $application->address_line1,
+            'address_line2' => $application->address_line2,
             'city' => $application->city,
             'state' => $application->state,
+            'postal_code' => $application->postal_code,
             'country' => $application->country,
             'address' => $application->address,
+            'standardized_address' => $application->standardized_address,
             'latitude' => $application->latitude !== null ? (float) $application->latitude : null,
             'longitude' => $application->longitude !== null ? (float) $application->longitude : null,
             'attendance_radius_meters' => $application->attendance_radius_meters,
+            'address_validated_at' => optional($application->address_validated_at)->toDateTimeString(),
+            'geocoded_at' => optional($application->geocoded_at)->toDateTimeString(),
+            'geocoding_provider' => $application->geocoding_provider,
             'timezone' => $application->timezone,
             'license_number' => $application->license_number,
             'license_status' => $application->license_status,
@@ -3774,6 +3879,8 @@ class ApiController extends Controller
             : 'Africa/Nairobi';
         $licenseNumber = trim((string) $application->license_number);
         $licenseStatus = $licenseNumber === '' ? ($application->license_status ?: 'not_provided') : ($application->license_status ?: 'pending');
+        $owner = $application->ownerUser ?: User::where('email', $application->owner_email)->first();
+        abort_unless($owner, 422, 'This application does not have a registered owner password. Ask the provider to submit a new registration.');
 
         $organization = Organization::create([
             'name' => $application->business_name,
@@ -3782,12 +3889,19 @@ class ApiController extends Controller
             'legal_name' => $application->legal_name,
             'phone' => $application->phone,
             'email' => $application->owner_email,
-            'address' => $application->address,
+            'address' => $application->standardized_address ?: $application->address,
+            'address_line1' => $application->address_line1,
+            'address_line2' => $application->address_line2,
+            'standardized_address' => $application->standardized_address,
             'latitude' => $application->latitude,
             'longitude' => $application->longitude,
             'city' => $application->city,
             'state' => $application->state,
+            'postal_code' => $application->postal_code,
             'country' => $application->country,
+            'address_validated_at' => $application->address_validated_at,
+            'geocoded_at' => $application->geocoded_at,
+            'geocoding_provider' => $application->geocoding_provider,
             'timezone' => $timezone,
             'license_number' => $licenseNumber !== '' ? $licenseNumber : null,
             'license_status' => $licenseStatus,
@@ -3806,7 +3920,7 @@ class ApiController extends Controller
             'organization_id' => $organization->id,
             'pricing_plan_id' => $plan->id,
             'billing_cycle' => $billingCycle,
-            'status' => 'pending_activation',
+            'status' => 'pending_payment',
             'provider' => 'manual',
             'current_period_start' => $periodStart,
             'current_period_end' => $periodEnd,
@@ -3815,19 +3929,24 @@ class ApiController extends Controller
             'notes' => 'Created from public facility registration application.',
         ]);
 
-        $invitation = $this->createOrganizationInvitation($request, $organization, [
-            'name' => $application->owner_name,
-            'email' => $application->owner_email,
+        $owner->update([
+            'organization_id' => $organization->id,
+            'name' => $owner->name ?: $application->owner_name,
             'role' => 'daycare_admin',
+            'status' => 'active',
+            'email_verified_at' => $owner->email_verified_at ?: now(),
         ]);
+        $this->syncNamedRole($owner, 'daycare_admin');
+
         $invoice = $this->ensureSubscriptionInvoice($subscription->fresh(['pricingPlan']));
 
         return [
             'organization' => $this->organizationPayload($organization->fresh()),
             'subscription' => $this->subscriptionPayload($subscription->fresh(['organization', 'pricingPlan'])),
-            'invitations' => [$this->invitationPayload($invitation)],
+            'owner' => $this->platformUserPayload($owner->fresh('organization')),
+            'invitations' => [],
             'invoice' => $invoice ? $this->platformInvoicePayload($invoice->fresh(['organization', 'subscription.pricingPlan', 'payments'])) : null,
-            'invite_note' => 'Owner/admin invitation email has been queued for delivery.',
+            'invite_note' => 'Owner can now log in using the email and password created during registration.',
         ];
     }
 
@@ -4310,6 +4429,10 @@ class ApiController extends Controller
             'email' => $org->email,
             'website' => $org->website,
             'address' => $org->address,
+            'address_line1' => $org->address_line1,
+            'address_line2' => $org->address_line2,
+            'standardized_address' => $org->standardized_address,
+            'postal_code' => $org->postal_code,
             'children' => $org->children_count ?? $org->children()->count(),
             'staff' => $org->staff_count ?? $org->users()->whereIn('role', ['staff', 'teacher', 'manager', 'daycare_admin'])->count(),
             'users_count' => $org->users()->count(),
@@ -4325,6 +4448,9 @@ class ApiController extends Controller
             'longitude' => $org->longitude ? (float) $org->longitude : null,
             'attendance_radius_meters' => (int) ($org->attendance_radius_meters ?? $org->checkin_radius_meters ?? 100),
             'checkin_radius_meters' => (int) ($org->attendance_radius_meters ?? $org->checkin_radius_meters ?? 100),
+            'address_validated_at' => optional($org->address_validated_at)->toDateTimeString(),
+            'geocoded_at' => optional($org->geocoded_at)->toDateTimeString(),
+            'geocoding_provider' => $org->geocoding_provider,
         ];
     }
 

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Models\FacilityRegistrationApplication;
 use App\Models\OrganizationInvitation;
 use App\Models\PlatformInvoice;
 use App\Models\PricingPlan;
@@ -62,12 +63,12 @@ class AuthController extends Controller
             throw ValidationException::withMessages(['email' => ['The provided credentials are incorrect.']]);
         }
 
-        if ($user->status !== 'active') {
+        if ($user->status !== 'active' && ! $this->isProviderRegistrationOwner($user)) {
             return response()->json(['message' => 'User is not active.'], 403);
         }
 
         return response()->json([
-            'user' => $user->load('organization'),
+            'user' => $this->authUserPayload($user->load('organization')),
             'token' => $user->createToken('barbaari-api')->plainTextToken,
         ]);
     }
@@ -75,7 +76,7 @@ class AuthController extends Controller
     public function me(Request $request)
     {
         $user = $request->user()->load('organization', 'staffProfile.classroom');
-        $payload = $user->toArray();
+        $payload = $this->authUserPayload($user);
         $payload['tablet_pin_configured'] = (bool) $user->pin_hash;
 
         return response()->json(['user' => $payload]);
@@ -452,6 +453,42 @@ class AuthController extends Controller
             'status' => $invitation->status,
             'expires_at' => optional($invitation->expires_at)->toDateTimeString(),
         ];
+    }
+
+    private function isProviderRegistrationOwner(User $user): bool
+    {
+        if (! in_array($user->status, ['pending_approval', 'rejected'], true)) {
+            return false;
+        }
+
+        return FacilityRegistrationApplication::where('owner_user_id', $user->id)
+            ->orWhere('owner_email', $user->email)
+            ->exists();
+    }
+
+    private function authUserPayload(User $user): array
+    {
+        $application = FacilityRegistrationApplication::where('owner_user_id', $user->id)
+            ->orWhere('owner_email', $user->email)
+            ->latest()
+            ->first();
+        $subscription = $user->organization_id
+            ? Subscription::where('organization_id', $user->organization_id)->latest()->first()
+            : null;
+        $paymentGate = $user->organization_id
+            ? app(SubscriptionAccessService::class)->getPaymentGateReason((int) $user->organization_id)
+            : ['requires_payment' => false, 'subscription_status' => null];
+
+        $payload = $user->toArray();
+        $payload['application_status'] = $application?->status;
+        $payload['organization_status'] = $user->organization?->status;
+        $payload['subscription_status'] = $paymentGate['subscription_status'] ?? $subscription?->status;
+        $payload['payment_required'] = (bool) ($paymentGate['requires_payment'] ?? false);
+        $payload['can_access_dashboard'] = $user->status === 'active'
+            && $user->organization?->status === 'active'
+            && ! $payload['payment_required'];
+
+        return $payload;
     }
 
     private function attendanceTimezone(int $organizationId): string

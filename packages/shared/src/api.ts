@@ -90,6 +90,9 @@ export const registrationApi = {
   pricingPlans(facility_type?: "family_child_care" | "center_daycare") {
     return data<ListResponse<any, "pricing_plans">>(api.get("/public/pricing-plans", { params: facility_type ? { facility_type } : undefined }));
   },
+  validateAddress(payload: Record<string, unknown>) {
+    return data<any>(api.post("/public/validate-address", payload));
+  },
   createApplication(payload: Record<string, unknown>) {
     return data<{ application: any; message: string }>(api.post("/registration-applications", payload));
   }

@@ -7,6 +7,11 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Organization extends BarbaariModel
 {
+    protected $casts = [
+        'address_validated_at' => 'datetime',
+        'geocoded_at' => 'datetime',
+    ];
+
     public function settings(): HasOne { return $this->hasOne(OrganizationSetting::class); }
     public function users(): HasMany { return $this->hasMany(User::class); }
     public function classrooms(): HasMany { return $this->hasMany(Classroom::class); }

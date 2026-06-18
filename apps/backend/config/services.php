@@ -34,6 +34,17 @@ return [
         'test_payment_enabled' => env('BILLING_TEST_PAYMENT_ENABLED', false),
     ],
 
+    'usps' => [
+        'consumer_key' => env('USPS_CONSUMER_KEY'),
+        'consumer_secret' => env('USPS_CONSUMER_SECRET'),
+        'base_url' => env('USPS_BASE_URL', 'https://apis.usps.com'),
+    ],
+
+    'geocoder' => [
+        'provider' => env('GEOCODER_PROVIDER', 'nominatim'),
+        'nominatim_base_url' => env('NOMINATIM_BASE_URL', 'https://nominatim.openstreetmap.org'),
+    ],
+
     'ses' => [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),

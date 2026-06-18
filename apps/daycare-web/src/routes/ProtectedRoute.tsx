@@ -4,10 +4,24 @@ import { authApi, daycarePlatformBillingApi, getApiError, setBearerToken } from 
 import { clearSession, getStoredToken } from "../services/auth";
 import { ErrorState, LoadingState } from "../components/Status";
 
+function ApprovalStatusScreen({ title, message, showLogout = false }: { title: string; message: string; showLogout?: boolean }) {
+  return (
+    <main className="page">
+      <section className="panel">
+        <div className="panel-header">
+          <h2>{title}</h2>
+          {showLogout ? <button className="secondary" onClick={() => { clearSession(); window.location.assign("/login"); }}>Logout</button> : null}
+        </div>
+        <p>{message}</p>
+      </section>
+    </main>
+  );
+}
+
 export function ProtectedRoute() {
   const token = getStoredToken();
   const location = useLocation();
-  const [status, setStatus] = useState<"checking" | "ready" | "denied" | "redirecting" | "error">("checking");
+  const [status, setStatus] = useState<"checking" | "ready" | "denied" | "redirecting" | "pending" | "rejected" | "error">("checking");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -20,6 +34,14 @@ export function ProtectedRoute() {
     authApi.me()
       .then(async ({ user }) => {
         if (["daycare_admin", "manager", "billing_manager"].includes(user.role)) {
+          if (user.application_status === "pending" || user.status === "pending_approval") {
+            setStatus("pending");
+            return;
+          }
+          if (user.application_status === "rejected" || user.status === "rejected") {
+            setStatus("rejected");
+            return;
+          }
           if (["daycare_admin", "manager"].includes(user.role)) {
             const billing = await daycarePlatformBillingApi.subscription();
             // Allow the payment page and the post-payment success page through
@@ -49,6 +71,8 @@ export function ProtectedRoute() {
 
   if (!token || status === "denied") return <Navigate to="/login" replace />;
   if (status === "checking" || status === "redirecting") return <main className="page"><LoadingState label="Checking session..." /></main>;
+  if (status === "pending") return <ApprovalStatusScreen title="Application pending" message="Your application is still pending approval." showLogout />;
+  if (status === "rejected") return <ApprovalStatusScreen title="Application not approved" message="Your application was not approved. Please contact support." showLogout />;
   if (status === "error") return <main className="page"><ErrorState message={error || "Session check failed."} onRetry={() => window.location.assign("/login")} /></main>;
 
   return <Outlet />;

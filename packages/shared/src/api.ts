@@ -116,6 +116,12 @@ export const organizationApi = {
   },
   updateOwnerTabletPin(pin: string) {
     return data<{ message: string; user: any; pin_configured: boolean }>(api.post("/settings/owner-tablet-pin", { pin }));
+  },
+  validateAttendanceLocation(payload: Record<string, unknown>) {
+    return data<any>(api.post("/settings/attendance-location/validate", payload));
+  },
+  updateAttendanceLocation(payload: Record<string, unknown>) {
+    return data<{ organization: any; message: string }>(api.post("/settings/attendance-location", payload));
   }
 };
 

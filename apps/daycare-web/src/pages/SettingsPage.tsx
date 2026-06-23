@@ -12,19 +12,23 @@ type OrgForm = {
   phone: string;
   email: string;
   website: string;
-  address: string;
-  city: string;
-  state: string;
-  country: string;
   timezone: string;
   license_number: string;
   license_status: string;
-  latitude: string;
-  longitude: string;
+};
+
+type LocationForm = {
+  address_line1: string;
+  address_line2: string;
+  city: string;
+  state: string;
+  postal_code: string;
+  country: string;
   attendance_radius_meters: string;
 };
 
-const empty: OrgForm = { name: "", legal_name: "", phone: "", email: "", website: "", address: "", city: "", state: "", country: "", timezone: "Africa/Nairobi", license_number: "", license_status: "not_provided", latitude: "", longitude: "", attendance_radius_meters: "100" };
+const empty: OrgForm = { name: "", legal_name: "", phone: "", email: "", website: "", timezone: "Africa/Nairobi", license_number: "", license_status: "not_provided" };
+const emptyLocation: LocationForm = { address_line1: "", address_line2: "", city: "", state: "", postal_code: "", country: "US", attendance_radius_meters: "100" };
 
 export function SettingsPage() {
   const { data: pageData, loading, error, reload } = useAsyncData(async () => {
@@ -34,11 +38,15 @@ export function SettingsPage() {
   const data = pageData?.organization;
   const currentUser = pageData?.user;
   const [form, setForm] = useState<OrgForm>(empty);
+  const [locationForm, setLocationForm] = useState<LocationForm>(emptyLocation);
+  const [validatedLocation, setValidatedLocation] = useState<any | null>(null);
   const [ownerPin, setOwnerPin] = useState("");
   const [ownerPinConfirm, setOwnerPinConfirm] = useState("");
   const [success, setSuccess] = useState("");
   const [actionError, setActionError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [validatingLocation, setValidatingLocation] = useState(false);
+  const [savingLocation, setSavingLocation] = useState(false);
   const [pinSaving, setPinSaving] = useState(false);
 
   useEffect(() => {
@@ -49,17 +57,20 @@ export function SettingsPage() {
       phone: data.phone ?? "",
       email: data.email ?? "",
       website: data.website ?? "",
-      address: data.address ?? "",
-      city: data.city ?? "",
-      state: data.state ?? "",
-      country: data.country ?? "",
       timezone: data.timezone ?? data.attendance_timezone ?? "Africa/Nairobi",
       license_number: data.license_number ?? "",
       license_status: data.license_status ?? (data.license_number ? "pending" : "not_provided"),
-      latitude: data.latitude == null ? "" : String(data.latitude),
-      longitude: data.longitude == null ? "" : String(data.longitude),
+    });
+    setLocationForm({
+      address_line1: data.address_line1 ?? "",
+      address_line2: data.address_line2 ?? "",
+      city: data.city ?? "",
+      state: data.state ?? "",
+      postal_code: data.postal_code ?? "",
+      country: data.country ?? "US",
       attendance_radius_meters: String(data.attendance_radius_meters ?? data.checkin_radius_meters ?? 100),
     });
+    setValidatedLocation(null);
   }, [data]);
 
   async function submit(event: FormEvent) {
@@ -68,18 +79,74 @@ export function SettingsPage() {
     setActionError("");
     setSaving(true);
     try {
-      await organizationApi.update({
-        ...form,
-        latitude: form.latitude === "" ? null : Number(form.latitude),
-        longitude: form.longitude === "" ? null : Number(form.longitude),
-        attendance_radius_meters: Number(form.attendance_radius_meters || 100),
-      });
+      await organizationApi.update(form);
       setSuccess("Organization profile updated.");
       await reload();
     } catch (err) {
       setActionError(getApiError(err).message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  function setLocationField(field: keyof LocationForm, value: string) {
+    setLocationForm((current) => ({ ...current, [field]: field === "state" || field === "country" ? value.toUpperCase() : value }));
+    setValidatedLocation(null);
+  }
+
+  function locationPayload() {
+    return {
+      address_line1: locationForm.address_line1,
+      address_line2: locationForm.address_line2 || null,
+      city: locationForm.city,
+      state: locationForm.state,
+      postal_code: locationForm.postal_code,
+      country: locationForm.country || "US",
+      radius: Number(locationForm.attendance_radius_meters || 100),
+    };
+  }
+
+  async function validateLocationAddress() {
+    setSuccess("");
+    setActionError("");
+    setValidatingLocation(true);
+    try {
+      const response = await organizationApi.validateAttendanceLocation(locationPayload());
+      setValidatedLocation(response);
+      setLocationForm((current) => ({
+        ...current,
+        address_line1: response.address_line1 ?? current.address_line1,
+        address_line2: response.address_line2 ?? "",
+        city: response.city ?? current.city,
+        state: response.state ?? current.state,
+        postal_code: response.postal_code ?? current.postal_code,
+        country: response.country ?? "US",
+      }));
+      setSuccess(response.message ?? "Address validated. This location will be used for tablet attendance geofence.");
+    } catch (err) {
+      setValidatedLocation(null);
+      setActionError(getApiError(err).message || "We could not validate this address. Please check the street, city, state, and ZIP code.");
+    } finally {
+      setValidatingLocation(false);
+    }
+  }
+
+  async function saveAttendanceLocation() {
+    setSuccess("");
+    setActionError("");
+    if (!validatedLocation) {
+      setActionError("Please validate the address before saving attendance location.");
+      return;
+    }
+    setSavingLocation(true);
+    try {
+      const response = await organizationApi.updateAttendanceLocation(locationPayload());
+      setSuccess(response.message ?? "Attendance location updated.");
+      await reload();
+    } catch (err) {
+      setActionError(getApiError(err).message);
+    } finally {
+      setSavingLocation(false);
     }
   }
 
@@ -109,6 +176,10 @@ export function SettingsPage() {
     }
   }
 
+  const canManageAttendanceLocation = ["daycare_admin", "manager"].includes(currentUser?.role ?? "");
+  const hasCurrentAddress = Boolean(data?.standardized_address || data?.address_line1);
+  const hasLegacyCoordinates = !hasCurrentAddress && data?.latitude != null && data?.longitude != null;
+
   return (
     <section className="page">
       <PageHeader eyebrow="Organization" title="Organization profile" description="Manage provider business details, licensing information, and attendance location." />
@@ -124,10 +195,6 @@ export function SettingsPage() {
                 <Field label="Phone" value={form.phone} onChange={(value) => setForm({ ...form, phone: value })} />
                 <Field label="Email" type="email" value={form.email} onChange={(value) => setForm({ ...form, email: value })} />
                 <Field label="Website" value={form.website} onChange={(value) => setForm({ ...form, website: value })} />
-                <Field label="Address" value={form.address} onChange={(value) => setForm({ ...form, address: value })} />
-                <Field label="City" value={form.city} onChange={(value) => setForm({ ...form, city: value })} />
-                <Field label="State" value={form.state} onChange={(value) => setForm({ ...form, state: value })} />
-                <Field label="Country" value={form.country} onChange={(value) => setForm({ ...form, country: value })} />
                 <Field label="License number" value={form.license_number} onChange={(value) => setForm({ ...form, license_number: value })} />
                 <label className="field-stack"><span>License status</span><select value={form.license_status} onChange={(event) => setForm({ ...form, license_status: event.target.value })}><option value="not_provided">Not provided</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option><option value="expired">Expired</option></select></label>
               </div>
@@ -142,12 +209,33 @@ export function SettingsPage() {
               </div>
             </Panel>
             <Panel title="Attendance Location">
-              <div className="form-grid labeled-grid">
-                <Field label="Latitude" type="number" value={form.latitude} onChange={(value) => setForm({ ...form, latitude: value })} />
-                <Field label="Longitude" type="number" value={form.longitude} onChange={(value) => setForm({ ...form, longitude: value })} />
-                <Field label="Allowed attendance radius (meters)" type="number" value={form.attendance_radius_meters} onChange={(value) => setForm({ ...form, attendance_radius_meters: value })} />
-                <p className="muted full">Attendance check-in and check-out require device location and are blocked outside this radius. For family child care, set the provider home/location coordinates before using live attendance operations.</p>
-              </div>
+              {hasCurrentAddress ? <p className="muted">Current saved address: {data.standardized_address || [data.address_line1, data.address_line2, data.city, data.state, data.postal_code].filter(Boolean).join(", ")}</p> : null}
+              {hasLegacyCoordinates ? <p className="muted">Current coordinates are saved. Update by entering a physical address below.</p> : null}
+              {!canManageAttendanceLocation ? (
+                <p className="muted">Only provider admins and managers can update attendance location.</p>
+              ) : (
+                <div className="form-grid labeled-grid">
+                  <Field label="Street address" value={locationForm.address_line1} onChange={(value) => setLocationField("address_line1", value)} required />
+                  <Field label="Unit / Apartment / Suite" value={locationForm.address_line2} onChange={(value) => setLocationField("address_line2", value)} />
+                  <Field label="City" value={locationForm.city} onChange={(value) => setLocationField("city", value)} required />
+                  <Field label="State" value={locationForm.state} onChange={(value) => setLocationField("state", value)} required />
+                  <Field label="ZIP Code" value={locationForm.postal_code} onChange={(value) => setLocationField("postal_code", value)} required />
+                  <Field label="Country" value={locationForm.country} onChange={(value) => setLocationField("country", value)} required />
+                  <Field label="Allowed attendance radius (meters)" type="number" value={locationForm.attendance_radius_meters} onChange={(value) => setLocationField("attendance_radius_meters", value)} required />
+                  <div className="full actions">
+                    <button className="secondary" type="button" disabled={validatingLocation} onClick={validateLocationAddress}>{validatingLocation ? "Validating..." : "Validate Address"}</button>
+                    <button className="primary" type="button" disabled={savingLocation || !validatedLocation} onClick={saveAttendanceLocation}>{savingLocation ? "Saving..." : "Save Attendance Location"}</button>
+                  </div>
+                  {validatedLocation ? (
+                    <div className="field-stack readonly-field full">
+                      <span>Standardized address</span>
+                      <strong>{validatedLocation.standardized_address}</strong>
+                      <small>Coordinates saved after validation.</small>
+                    </div>
+                  ) : null}
+                  <p className="muted full">Attendance check-in and check-out require device location and are blocked outside this radius. This address will be used for tablet attendance geofence.</p>
+                </div>
+              )}
             </Panel>
             <button className="primary settings-submit" disabled={saving}>{saving ? "Saving..." : "Update organization"}</button>
           </form>

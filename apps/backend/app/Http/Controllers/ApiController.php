@@ -251,22 +251,59 @@ class ApiController extends Controller
             'timezone' => ['nullable', 'timezone'],
             'license_number' => ['nullable', 'string', 'max:255'],
             'license_status' => ['nullable', 'in:not_provided,pending,verified,rejected,expired'],
-            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
-            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
-            'attendance_radius_meters' => ['nullable', 'integer', 'min:25', 'max:10000'],
-            'checkin_radius_meters' => ['nullable', 'integer', 'min:25', 'max:10000'],
         ]);
-        if (array_key_exists('attendance_radius_meters', $data)) {
-            $data['checkin_radius_meters'] = $data['attendance_radius_meters'];
-        } elseif (array_key_exists('checkin_radius_meters', $data)) {
-            $data['attendance_radius_meters'] = $data['checkin_radius_meters'];
-        }
         $organization->update($data);
         if (! empty($data['timezone'])) {
             $this->updateOrganizationTimezone($organization, $data['timezone']);
         }
 
         return response()->json(['organization' => $organization->fresh('settings')]);
+    }
+
+    public function validateAttendanceLocationAddress(Request $request)
+    {
+        $data = $this->validateAttendanceLocationInput($request);
+        $standardized = $this->uspsAddress->validate($data);
+        $coordinates = $this->geocoder->geocode($standardized);
+
+        return response()->json([
+            ...$standardized,
+            ...$coordinates,
+            'radius' => (int) $data['radius'],
+            'message' => 'Address validated. This location will be used for tablet attendance geofence.',
+        ]);
+    }
+
+    public function updateAttendanceLocation(Request $request)
+    {
+        $organization = Organization::findOrFail($this->orgId($request));
+        $data = $this->validateAttendanceLocationInput($request);
+        $standardized = $this->uspsAddress->validate($data);
+        $coordinates = $this->geocoder->geocode($standardized);
+        $radius = (int) $data['radius'];
+
+        $organization->update([
+            'address' => $standardized['standardized_address'],
+            'address_line1' => $standardized['address_line1'],
+            'address_line2' => $standardized['address_line2'],
+            'city' => $standardized['city'],
+            'state' => $standardized['state'],
+            'postal_code' => $standardized['postal_code'],
+            'country' => $standardized['country'],
+            'standardized_address' => $standardized['standardized_address'],
+            'latitude' => $coordinates['latitude'],
+            'longitude' => $coordinates['longitude'],
+            'attendance_radius_meters' => $radius,
+            'checkin_radius_meters' => $radius,
+            'address_validated_at' => now(),
+            'geocoded_at' => now(),
+            'geocoding_provider' => $coordinates['geocoding_provider'],
+        ]);
+
+        return response()->json([
+            'organization' => $organization->fresh('settings'),
+            'message' => 'Attendance location updated.',
+        ]);
     }
 
     public function children(Request $request)
@@ -3825,6 +3862,23 @@ class ApiController extends Controller
     private function normalizeAddressField(?string $value): string
     {
         return Str::upper(preg_replace('/\s+/', ' ', trim((string) $value)));
+    }
+
+    private function validateAttendanceLocationInput(Request $request): array
+    {
+        $data = $request->validate([
+            'address_line1' => ['required', 'string', 'max:255'],
+            'address_line2' => ['nullable', 'string', 'max:255'],
+            'city' => ['required', 'string', 'max:120'],
+            'state' => ['required', 'string', 'size:2'],
+            'postal_code' => ['required', 'string', 'max:20'],
+            'country' => ['nullable', 'string', 'size:2'],
+            'radius' => ['required', 'integer', 'min:25', 'max:10000'],
+        ]);
+        $data['country'] = strtoupper($data['country'] ?? 'US');
+        $data['state'] = strtoupper($data['state']);
+
+        return $data;
     }
 
     private function registrationApplicationPayload(FacilityRegistrationApplication $application): array

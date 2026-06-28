@@ -187,6 +187,7 @@ export function TabletPortalPage() {
     setMessage("");
     try {
       const signerPayload = attendanceSignerPayload();
+      const location = await browserLocation();
       if (selectedAction === "absence") {
         await tabletApi.markAbsent({
           child_id: selectedChild.id,
@@ -197,10 +198,10 @@ export function TabletPortalPage() {
           verification_method: "pin",
           pin_verification_id: pinVerificationId,
           signature_name: signatureName,
-          ...signerPayload
+          ...signerPayload,
+          ...location
         });
       } else {
-        const location = await browserLocation();
         const payload: Record<string, unknown> = {
           child_id: selectedChild.id,
           verification_method: "pin",

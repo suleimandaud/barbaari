@@ -240,7 +240,7 @@ export const tabletApi = {
   guardianCheckOut(payload: Record<string, unknown>) {
     return data<{ attendance: any }>(api.post("/tablet/attendance/guardian-check-out", payload));
   },
-  markAbsent(payload: { child_id: string | number; absence_date: string; absence_type: string; reason?: string; notes?: string; status?: string; assisting_staff_id?: string | number; signer_type?: string; guardian_id?: string | number; signer_name?: string; verification_method?: string; pin_verification_id?: string | number; signature_name?: string }) {
+  markAbsent(payload: { child_id: string | number; absence_date: string; absence_type: string; reason?: string; notes?: string; status?: string; assisting_staff_id?: string | number; signer_type?: string; guardian_id?: string | number; signer_name?: string; verification_method?: string; pin_verification_id?: string | number; signature_name?: string; latitude?: number; longitude?: number }) {
     return data<{ absence_record: any }>(api.post("/tablet/absence-records", payload));
   }
 };

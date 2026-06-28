@@ -655,6 +655,8 @@ class ApiController extends Controller
             'verification_method' => ['nullable', 'in:pin'],
             'pin_verification_id' => ['nullable', 'exists:pin_verification_logs,id'],
             'signature_name' => ['nullable', 'string', 'max:255'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
             'status' => ['sometimes', 'in:recorded,reviewed,cancelled'],
         ]);
 
@@ -665,6 +667,7 @@ class ApiController extends Controller
             abort_unless(($data['verification_method'] ?? null) === 'pin', 422, 'Please verify the signer PIN before saving an absence.');
             abort_unless(! empty($data['pin_verification_id']), 422, 'Please verify the signer PIN before saving an absence.');
             abort_unless(! empty($data['signature_name']), 422, 'Please capture a signature before saving an absence.');
+            $locationData = $this->calculateLocationData($child->organization_id, $data['latitude'] ?? null, $data['longitude'] ?? null, 'absence', $child, $request->user());
             $this->consumePinVerificationIfNeeded($request, $data);
         }
 
@@ -697,6 +700,11 @@ class ApiController extends Controller
                 'absence_type' => $absence->absence_type,
                 'reason' => $absence->reason,
                 'status' => $absence->status,
+                'latitude' => $locationData['latitude'] ?? null,
+                'longitude' => $locationData['longitude'] ?? null,
+                'distance_meters' => $locationData['distance_meters'] ?? null,
+                'location_verified' => $locationData['location_verified'] ?? null,
+                'location_flagged' => $locationData['location_flagged'] ?? null,
             ],
             'ip_address' => $request->ip(),
         ]);
@@ -4573,14 +4581,14 @@ class ApiController extends Controller
     private function calculateLocationData(int $organizationId, ?float $lat, ?float $lng, string $direction, Child $child, User $actor): array
     {
         if ($lat === null || $lng === null) {
-            $message = 'Device location is required for attendance. Allow location access and try again.';
+            $message = 'Device location is required for attendance.';
             $this->auditLocationRejection($organizationId, $child, $actor, $direction, $message);
             throw ValidationException::withMessages(['location' => [$message]]);
         }
 
         $org = Organization::find($organizationId);
         if (! $org || $org->latitude === null || $org->longitude === null) {
-            $message = 'Daycare attendance location is not configured. Ask an admin to set the daycare location before recording attendance.';
+            $message = 'Attendance location is not configured. Please update it in Settings.';
             $this->auditLocationRejection($organizationId, $child, $actor, $direction, $message);
             throw ValidationException::withMessages(['location' => [$message]]);
         }
@@ -4589,7 +4597,7 @@ class ApiController extends Controller
         $radius = (int) ($org->attendance_radius_meters ?? $org->checkin_radius_meters ?? 100);
         $roundedDistance = (int) round($distance);
         if ($distance > $radius) {
-            $message = "Attendance blocked: device is approximately {$roundedDistance}m from the daycare center, outside the allowed {$radius}m radius.";
+            $message = 'You are outside the allowed attendance location radius.';
             $this->auditLocationRejection($organizationId, $child, $actor, $direction, $message, $roundedDistance, $radius);
             $this->notifyLocationRejection($org, $child, $actor, $direction, $roundedDistance, $radius);
             throw ValidationException::withMessages(['location' => [$message]]);

@@ -20,7 +20,6 @@ const emptyForm = {
   address: "",
   attendance_radius_meters: "100",
   address_validation_token: "",
-  timezone: "America/New_York",
   license_number: "",
   license_status: "not_provided",
   pricing_plan_id: "",
@@ -184,9 +183,15 @@ export function RegisterProviderPage() {
               </ul>
               <p>Address validated. Location will be used for tablet attendance geofence.</p>
               {validatedAddress.latitude && validatedAddress.longitude ? <small>Location coordinates saved.</small> : null}
+              {validatedAddress.timezone ? (
+                <div>
+                  <span>Timezone</span>
+                  <strong>{validatedAddress.timezone}</strong>
+                  <small>✓ Automatically detected from attendance address</small>
+                </div>
+              ) : null}
             </article>
           ) : null}
-          <input value={form.timezone} onChange={(event) => setForm({ ...form, timezone: event.target.value })} placeholder="Timezone, e.g. America/New_York" />
           <input value={form.license_number} onChange={(event) => setForm({ ...form, license_number: event.target.value })} placeholder="License number optional" />
           <select value={form.license_status} onChange={(event) => setForm({ ...form, license_status: event.target.value })}><option value="not_provided">License not provided</option><option value="pending">Pending</option><option value="verified">Verified</option></select>
           <label className="field-stack full"><span>Desired plan</span><select value={form.pricing_plan_id} onChange={(event) => setForm({ ...form, pricing_plan_id: event.target.value })}>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - ${Number(plan.monthly_price).toFixed(0)}/month ({plan.child_limit} children, {plan.staff_limit} staff, {plan.device_limit} tablets)</option>)}</select></label>

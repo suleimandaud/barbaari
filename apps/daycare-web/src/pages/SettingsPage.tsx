@@ -12,7 +12,6 @@ type OrgForm = {
   phone: string;
   email: string;
   website: string;
-  timezone: string;
   license_number: string;
   license_status: string;
 };
@@ -27,7 +26,7 @@ type LocationForm = {
   attendance_radius_meters: string;
 };
 
-const empty: OrgForm = { name: "", legal_name: "", phone: "", email: "", website: "", timezone: "Africa/Nairobi", license_number: "", license_status: "not_provided" };
+const empty: OrgForm = { name: "", legal_name: "", phone: "", email: "", website: "", license_number: "", license_status: "not_provided" };
 const emptyLocation: LocationForm = { address_line1: "", address_line2: "", city: "", state: "", postal_code: "", country: "US", attendance_radius_meters: "100" };
 
 export function SettingsPage() {
@@ -57,7 +56,6 @@ export function SettingsPage() {
       phone: data.phone ?? "",
       email: data.email ?? "",
       website: data.website ?? "",
-      timezone: data.timezone ?? data.attendance_timezone ?? "Africa/Nairobi",
       license_number: data.license_number ?? "",
       license_status: data.license_status ?? (data.license_number ? "pending" : "not_provided"),
     });
@@ -179,6 +177,7 @@ export function SettingsPage() {
   const canManageAttendanceLocation = ["daycare_admin", "manager"].includes(currentUser?.role ?? "");
   const hasCurrentAddress = Boolean(data?.standardized_address || data?.address_line1);
   const hasLegacyCoordinates = !hasCurrentAddress && data?.latitude != null && data?.longitude != null;
+  const detectedTimezone = validatedLocation?.timezone ?? data?.timezone ?? data?.attendance_timezone ?? null;
 
   return (
     <section className="page">
@@ -201,7 +200,6 @@ export function SettingsPage() {
             </Panel>
             <Panel title="Status / Settings">
               <div className="form-grid labeled-grid">
-                <Field label="Timezone" value={form.timezone} onChange={(value) => setForm({ ...form, timezone: value })} />
                 <ReadOnly label="Facility type" value={String(data.facility_type ?? "center_daycare").replace(/_/g, " ")} />
                 <ReadOnly label="Organization status" value={<Badge tone={data.status === "active" ? "success" : "warning"}>{data.status ?? "active"}</Badge>} />
                 <ReadOnly label="Subscription plan" value={data.subscription?.pricing_plan?.name ?? data.plan ?? "Starter"} />
@@ -231,6 +229,13 @@ export function SettingsPage() {
                       <span>Standardized address</span>
                       <strong>{validatedLocation.standardized_address}</strong>
                       <small>Coordinates saved after validation.</small>
+                    </div>
+                  ) : null}
+                  {detectedTimezone ? (
+                    <div className="field-stack readonly-field full">
+                      <span>Timezone</span>
+                      <strong>{detectedTimezone}</strong>
+                      <small>✓ Automatically detected from attendance address</small>
                     </div>
                   ) : null}
                   <p className="muted full">Attendance check-in and check-out require device location and are blocked outside this radius. This address will be used for tablet attendance geofence.</p>

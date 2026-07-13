@@ -21,10 +21,12 @@ export function setBearerToken(token?: string | null) {
 export function getApiError(error: unknown): ApiError {
   if (axios.isAxiosError(error)) {
     const err = error as AxiosError<any>;
+    const errors = err.response?.data?.errors as Record<string, string[]> | undefined;
+    const firstFieldMessage = errors ? Object.values(errors).flat().find((message) => typeof message === "string") : undefined;
     return {
-      message: err.response?.data?.message || err.message || "Request failed",
+      message: firstFieldMessage || err.response?.data?.message || err.message || "Request failed",
       status: err.response?.status,
-      errors: err.response?.data?.errors
+      errors
     };
   }
   return { message: error instanceof Error ? error.message : "Request failed" };

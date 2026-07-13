@@ -8,6 +8,7 @@ use App\Models\PricingPlan;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Services\GeocodingService;
+use App\Services\TimezoneLookupService;
 use App\Services\USPSAddressService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -51,6 +52,13 @@ class SettingsAttendanceLocationTest extends TestCase
                 ];
             }
         });
+
+        $this->app->instance(TimezoneLookupService::class, new class extends TimezoneLookupService {
+            public function resolve(float $latitude, float $longitude): string
+            {
+                return 'America/New_York';
+            }
+        });
     }
 
     public function test_provider_admin_can_validate_and_update_attendance_location(): void
@@ -63,6 +71,7 @@ class SettingsAttendanceLocationTest extends TestCase
             ->assertJsonPath('standardized_address', '1600 PENNSYLVANIA AVE NW, WASHINGTON, DC 20500')
             ->assertJsonPath('latitude', 38.8977)
             ->assertJsonPath('longitude', -77.0365)
+            ->assertJsonPath('timezone', 'America/New_York')
             ->assertJsonPath('message', 'Address validated. This location will be used for tablet attendance geofence.');
 
         $this->actingAs($admin, 'sanctum')
@@ -71,6 +80,8 @@ class SettingsAttendanceLocationTest extends TestCase
             ->assertJsonPath('organization.standardized_address', '1600 PENNSYLVANIA AVE NW, WASHINGTON, DC 20500')
             ->assertJsonPath('organization.latitude', 38.8977)
             ->assertJsonPath('organization.longitude', -77.0365)
+            ->assertJsonPath('organization.timezone', 'America/New_York')
+            ->assertJsonPath('timezone', 'America/New_York')
             ->assertJsonPath('organization.attendance_radius_meters', 150);
 
         $organization->refresh();
@@ -79,9 +90,29 @@ class SettingsAttendanceLocationTest extends TestCase
         $this->assertSame('nominatim', $organization->geocoding_provider);
         $this->assertEquals(38.8977, (float) $organization->latitude);
         $this->assertEquals(-77.0365, (float) $organization->longitude);
+        $this->assertSame('America/New_York', $organization->timezone);
         $this->assertSame(150, (int) $organization->attendance_radius_meters);
         $this->assertNotNull($organization->address_validated_at);
         $this->assertNotNull($organization->geocoded_at);
+    }
+
+    public function test_organization_profile_update_no_longer_accepts_manual_timezone(): void
+    {
+        [$organization, $admin] = $this->activeOrganizationAndUser('daycare_admin');
+
+        $this->actingAs($admin, 'sanctum')
+            ->postJson('/api/settings/attendance-location', $this->locationPayload())
+            ->assertOk();
+
+        $this->actingAs($admin, 'sanctum')
+            ->putJson('/api/manager/organization', [
+                'name' => 'Settings Center',
+                'timezone' => 'Not/AValidTimezone',
+            ])
+            ->assertOk();
+
+        $organization->refresh();
+        $this->assertSame('America/New_York', $organization->timezone);
     }
 
     public function test_manager_can_update_attendance_location(): void

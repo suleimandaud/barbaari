@@ -42,6 +42,7 @@ use App\Services\NotificationService;
 use App\Services\GeocodingService;
 use App\Services\StripeService;
 use App\Services\SubscriptionAccessService;
+use App\Services\TimezoneLookupService;
 use App\Services\USPSAddressService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -67,6 +68,7 @@ class ApiController extends Controller
         private SubscriptionAccessService $subscriptionAccess,
         private USPSAddressService $uspsAddress,
         private GeocodingService $geocoder,
+        private TimezoneLookupService $timezoneLookup,
     ) {
     }
 
@@ -119,9 +121,11 @@ class ApiController extends Controller
 
         $standardized = $this->uspsAddress->validate($data);
         $coordinates = $this->geocoder->geocode($standardized);
+        $timezone = $this->timezoneLookup->resolve((float) $coordinates['latitude'], (float) $coordinates['longitude']);
         $validated = [
             ...$standardized,
             ...$coordinates,
+            'timezone' => $timezone,
             'address_validated_at' => now()->toISOString(),
             'geocoded_at' => now()->toISOString(),
         ];
@@ -154,7 +158,7 @@ class ApiController extends Controller
             'country' => ['required', 'string', 'size:2'],
             'address' => ['nullable', 'string', 'max:255'],
             'attendance_radius_meters' => ['required', 'integer', 'min:25', 'max:5000'],
-            'timezone' => ['nullable', 'string', 'max:80'],
+            'timezone' => ['nullable', 'timezone'],
             'license_number' => ['nullable', 'string', 'max:255'],
             'license_status' => ['nullable', 'in:not_provided,pending,verified,rejected,expired'],
             'pricing_plan_id' => ['nullable', 'exists:pricing_plans,id'],
@@ -248,14 +252,10 @@ class ApiController extends Controller
             'city' => ['nullable', 'string', 'max:120'],
             'state' => ['nullable', 'string', 'max:120'],
             'country' => ['nullable', 'string', 'max:120'],
-            'timezone' => ['nullable', 'timezone'],
             'license_number' => ['nullable', 'string', 'max:255'],
             'license_status' => ['nullable', 'in:not_provided,pending,verified,rejected,expired'],
         ]);
         $organization->update($data);
-        if (! empty($data['timezone'])) {
-            $this->updateOrganizationTimezone($organization, $data['timezone']);
-        }
 
         return response()->json(['organization' => $organization->fresh('settings')]);
     }
@@ -265,10 +265,12 @@ class ApiController extends Controller
         $data = $this->validateAttendanceLocationInput($request);
         $standardized = $this->uspsAddress->validate($data);
         $coordinates = $this->geocoder->geocode($standardized);
+        $timezone = $this->timezoneLookup->resolve((float) $coordinates['latitude'], (float) $coordinates['longitude']);
 
         return response()->json([
             ...$standardized,
             ...$coordinates,
+            'timezone' => $timezone,
             'radius' => (int) $data['radius'],
             'message' => 'Address validated. This location will be used for tablet attendance geofence.',
         ]);
@@ -280,6 +282,7 @@ class ApiController extends Controller
         $data = $this->validateAttendanceLocationInput($request);
         $standardized = $this->uspsAddress->validate($data);
         $coordinates = $this->geocoder->geocode($standardized);
+        $timezone = $this->timezoneLookup->resolve((float) $coordinates['latitude'], (float) $coordinates['longitude']);
         $radius = (int) $data['radius'];
 
         $organization->update([
@@ -293,15 +296,18 @@ class ApiController extends Controller
             'standardized_address' => $standardized['standardized_address'],
             'latitude' => $coordinates['latitude'],
             'longitude' => $coordinates['longitude'],
+            'timezone' => $timezone,
             'attendance_radius_meters' => $radius,
             'checkin_radius_meters' => $radius,
             'address_validated_at' => now(),
             'geocoded_at' => now(),
             'geocoding_provider' => $coordinates['geocoding_provider'],
         ]);
+        $this->updateOrganizationTimezone($organization, $timezone);
 
         return response()->json([
             'organization' => $organization->fresh('settings'),
+            'timezone' => $timezone,
             'message' => 'Attendance location updated.',
         ]);
     }

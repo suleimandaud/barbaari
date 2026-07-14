@@ -32,13 +32,19 @@ export async function restoreToken() {
   return token;
 }
 
-export async function loginMobile(email: string, password: string) {
-  const response = await authApi.login(email, password);
-  await SecureStore.setItemAsync(TOKEN_KEY, response.token);
+export async function loginMobile(email: string, credential: string, allowPin = false) {
+  const response = allowPin && /^\d{4,8}$/.test(credential)
+    ? await authApi.pinLogin({ email, pin: credential, purpose: "mobile_staff_login" })
+    : await authApi.login(email, credential);
   setBearerToken(response.token);
-  const me = (await authApi.me()).user;
+  const me = response.user as MobileUser;
+  if (mobileAreaForRole(me.role) === "unsupported") {
+    await authApi.logout().catch(() => setBearerToken(undefined));
+    throw new Error("This mobile app is only available to parents and classroom staff.");
+  }
+  await SecureStore.setItemAsync(TOKEN_KEY, response.token);
   await storeUser(me);
-  return me as MobileUser;
+  return me;
 }
 
 export async function loginTabletWithPin(email: string, pin: string) {

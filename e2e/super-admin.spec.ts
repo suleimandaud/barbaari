@@ -11,16 +11,16 @@ async function trackConsoleErrors(page: Page) {
 
 async function login(page: Page) {
   await page.goto("/login");
-  await expect(page.getByRole("heading", { name: /platform admin login/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /platform admin sign in/i })).toBeVisible();
   await page.getByPlaceholder("Email").fill("super@barbaari.test");
   await page.getByPlaceholder("Password").fill("Password123!");
-  await page.getByRole("button", { name: /^login$/i }).click();
+  await page.getByRole("button", { name: /^sign in$/i }).click();
   await expect(page.getByRole("heading", { name: /saas platform command center/i })).toBeVisible();
 }
 
 test("logged-out protected routes redirect to login", async ({ page }) => {
   await page.goto("/organizations");
-  await expect(page.getByRole("heading", { name: /platform admin login/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /platform admin sign in/i })).toBeVisible();
 });
 
 test("super admin can log in and open core platform pages without blank screens", async ({ page }) => {

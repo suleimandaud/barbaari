@@ -11,16 +11,16 @@ async function trackConsoleErrors(page: Page) {
 
 async function login(page: Page) {
   await page.goto("/login");
-  await expect(page.getByRole("heading", { name: /daycare login/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /daycare sign in/i })).toBeVisible();
   await page.getByPlaceholder("Email").fill("admin@littlelantern.test");
   await page.getByPlaceholder("Password").fill("Password123!");
-  await page.getByRole("button", { name: /^login$/i }).click();
+  await page.getByRole("button", { name: /^sign in$/i }).click();
   await expect(page.getByRole("heading", { name: /attendance dashboard/i })).toBeVisible();
 }
 
 test("logged-out protected routes redirect to login", async ({ page }) => {
   await page.goto("/children");
-  await expect(page.getByRole("heading", { name: /daycare login/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /daycare sign in/i })).toBeVisible();
 });
 
 test("admin can log in and open core daycare pages without blank screens", async ({ page }) => {

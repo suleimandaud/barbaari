@@ -7,4 +7,12 @@ export function getStoredToken() { return localStorage.getItem(TOKEN_KEY); }
 export function getStoredEmail() { return localStorage.getItem(EMAIL_KEY) ?? "super@barbaari.test"; }
 export function storeSession(token: string, email: string) { localStorage.setItem(TOKEN_KEY, token); localStorage.setItem(EMAIL_KEY, email); setBearerToken(token); }
 export function clearSession() { localStorage.removeItem(TOKEN_KEY); setBearerToken(undefined); }
-export async function login(email: string, password: string) { const response = await authApi.login(email, password); storeSession(response.token, email); return response.user; }
+export async function login(email: string, password: string) {
+  const response = await authApi.login(email, password);
+  if (response.user.role !== "super_admin") {
+    await authApi.logout().catch(() => setBearerToken(undefined));
+    throw new Error("This account does not have access to platform administration.");
+  }
+  storeSession(response.token, email);
+  return response.user;
+}

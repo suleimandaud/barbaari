@@ -2,7 +2,13 @@
 
 use App\Http\Controllers\ApiController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\TimezoneDiagnosticsController;
 use Illuminate\Support\Facades\Route;
+
+// TEMPORARY — production timezone-detection incident diagnostics. Token-gated (404s unless
+// TIMEZONE_DEBUG_TOKEN is set). Remove this route and app/Http/Controllers/TimezoneDiagnosticsController.php
+// once the incident in TIMEZONE_PRODUCTION_DEBUG_REPORT.md is resolved.
+Route::get('_debug/timezone-lookup', [TimezoneDiagnosticsController::class, 'check'])->middleware('throttle:20,1');
 
 Route::get('public/pricing-plans', [ApiController::class, 'publicPricingPlans']);
 Route::post('public/validate-address', [ApiController::class, 'validatePublicAddress'])->middleware('throttle:6,1');

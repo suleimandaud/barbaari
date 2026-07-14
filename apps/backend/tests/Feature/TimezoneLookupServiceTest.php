@@ -3,67 +3,200 @@
 namespace Tests\Feature;
 
 use App\Services\TimezoneLookupService;
+use App\Services\TimezoneProviders\TimezoneProviderException;
+use App\Services\TimezoneProviders\TimezoneProviderInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
+/**
+ * Orchestrator-level behavior: fallback ordering, skip-if-unconfigured, and the
+ * all-providers-exhausted failure path. Per-provider HTTP behavior (retry, timeouts,
+ * response parsing) is covered separately in tests/Feature/TimezoneProviders/.
+ */
 class TimezoneLookupServiceTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_it_resolves_a_valid_iana_timezone_from_the_lookup_provider(): void
+    public function test_it_returns_the_first_successful_providers_timezone(): void
     {
-        Http::fake([
-            'www.timeapi.io/api/timezone/coordinate*' => Http::response(['timeZone' => 'America/Los_Angeles'], 200),
+        $service = new TimezoneLookupService([
+            $this->fakeProvider('first', 'America/Los_Angeles'),
+            $this->fakeProvider('second', 'America/New_York'),
         ]);
 
-        $timezone = app(TimezoneLookupService::class)->resolve(47.6062, -122.3321);
-
-        $this->assertSame('America/Los_Angeles', $timezone);
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://www.timeapi.io/api/timezone/coordinate?latitude=47.6062&longitude=-122.3321'
-                || str_contains($request->url(), '/api/timezone/coordinate');
-        });
+        $this->assertSame('America/Los_Angeles', $service->resolve(47.6062, -122.3321));
     }
 
-    public function test_it_throws_a_friendly_validation_error_when_the_provider_is_unreachable(): void
+    public function test_provider_1_failure_falls_through_to_provider_2(): void
     {
-        Http::fake([
-            'www.timeapi.io/*' => Http::response(null, 500),
+        Log::spy();
+
+        $service = new TimezoneLookupService([
+            $this->failingProvider('first', 'http_error_status'),
+            $this->fakeProvider('second', 'America/New_York'),
+        ]);
+
+        $this->assertSame('America/New_York', $service->resolve(40.7128, -74.0060));
+
+        Log::shouldHaveReceived('info')->withArgs(function ($message, $context) {
+            return $message === 'Timezone lookup resolved.'
+                && $context['provider_used'] === 'second'
+                && $context['fallback_used'] === true
+                && $context['providers_attempted'] === ['first', 'second'];
+        })->once();
+    }
+
+    public function test_provider_1_timeout_falls_through_to_provider_2(): void
+    {
+        $service = new TimezoneLookupService([
+            $this->failingProvider('first', 'connection_failure'),
+            $this->fakeProvider('second', 'America/Chicago'),
+        ]);
+
+        $this->assertSame('America/Chicago', $service->resolve(41.8781, -87.6298));
+    }
+
+    public function test_unconfigured_providers_are_skipped_without_being_attempted(): void
+    {
+        $skippable = new class implements TimezoneProviderInterface {
+            public bool $wasResolveCalled = false;
+
+            public function name(): string
+            {
+                return 'skippable';
+            }
+
+            public function isConfigured(): bool
+            {
+                return false;
+            }
+
+            public function resolve(float $latitude, float $longitude): string
+            {
+                $this->wasResolveCalled = true;
+
+                return 'should-not-happen';
+            }
+        };
+
+        $service = new TimezoneLookupService([
+            $skippable,
+            $this->fakeProvider('real', 'America/Phoenix'),
+        ]);
+
+        $this->assertSame('America/Phoenix', $service->resolve(33.4484, -112.0740));
+        $this->assertFalse($skippable->wasResolveCalled);
+    }
+
+    public function test_when_every_provider_fails_it_throws_one_generic_friendly_error_naming_no_provider(): void
+    {
+        Log::spy();
+
+        $service = new TimezoneLookupService([
+            $this->failingProvider('first', 'http_error_status'),
+            $this->failingProvider('second', 'invalid_json'),
         ]);
 
         try {
-            app(TimezoneLookupService::class)->resolve(47.6062, -122.3321);
-            $this->fail('Expected a ValidationException to be thrown.');
+            $service->resolve(0.0, 0.0);
+            $this->fail('Expected a ValidationException.');
         } catch (ValidationException $exception) {
-            $this->assertArrayHasKey('address', $exception->errors());
+            $message = $exception->errors()['address'][0];
             $this->assertSame(
                 'We could not automatically determine the timezone for this address. Please double-check the address and try again.',
-                $exception->errors()['address'][0]
+                $message
             );
+            $this->assertStringNotContainsString('first', $message);
+            $this->assertStringNotContainsString('second', $message);
+            $this->assertStringNotContainsString('timeapi', strtolower($message));
+            $this->assertStringNotContainsString('geonames', strtolower($message));
+            $this->assertStringNotContainsString('google', strtolower($message));
         }
+
+        Log::shouldHaveReceived('error')->withArgs(function ($message, $context) {
+            return $message === 'Timezone lookup failed: every configured provider was exhausted.'
+                && $context['providers_attempted'] === ['first', 'second'];
+        })->once();
     }
 
-    public function test_it_throws_a_friendly_validation_error_when_the_provider_returns_an_invalid_timezone(): void
+    public function test_when_all_providers_are_unconfigured_it_still_throws_the_generic_friendly_error(): void
     {
-        Http::fake([
-            'www.timeapi.io/*' => Http::response(['timeZone' => 'Not/ARealZone'], 200),
-        ]);
+        $unconfigured = new class implements TimezoneProviderInterface {
+            public function name(): string
+            {
+                return 'unconfigured';
+            }
+
+            public function isConfigured(): bool
+            {
+                return false;
+            }
+
+            public function resolve(float $latitude, float $longitude): string
+            {
+                throw new \LogicException('should never be called');
+            }
+        };
+
+        $service = new TimezoneLookupService([$unconfigured]);
 
         $this->expectException(ValidationException::class);
-
-        app(TimezoneLookupService::class)->resolve(0.0, 0.0);
+        $service->resolve(47.6062, -122.3321);
     }
 
-    public function test_it_throws_a_friendly_validation_error_when_the_provider_returns_no_body(): void
+    public function test_real_container_binding_resolves_with_the_default_provider_chain(): void
     {
-        Http::fake([
-            'www.timeapi.io/*' => Http::response([], 200),
-        ]);
+        $service = app(TimezoneLookupService::class);
+        $this->assertInstanceOf(TimezoneLookupService::class, $service);
+    }
 
-        $this->expectException(ValidationException::class);
+    private function fakeProvider(string $name, string $timezone): TimezoneProviderInterface
+    {
+        return new class($name, $timezone) implements TimezoneProviderInterface {
+            public function __construct(private string $providerName, private string $timezone)
+            {
+            }
 
-        app(TimezoneLookupService::class)->resolve(0.0, 0.0);
+            public function name(): string
+            {
+                return $this->providerName;
+            }
+
+            public function isConfigured(): bool
+            {
+                return true;
+            }
+
+            public function resolve(float $latitude, float $longitude): string
+            {
+                return $this->timezone;
+            }
+        };
+    }
+
+    private function failingProvider(string $name, string $reason): TimezoneProviderInterface
+    {
+        return new class($name, $reason) implements TimezoneProviderInterface {
+            public function __construct(private string $providerName, private string $reason)
+            {
+            }
+
+            public function name(): string
+            {
+                return $this->providerName;
+            }
+
+            public function isConfigured(): bool
+            {
+                return true;
+            }
+
+            public function resolve(float $latitude, float $longitude): string
+            {
+                throw new TimezoneProviderException($this->providerName, $this->reason);
+            }
+        };
     }
 }

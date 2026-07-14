@@ -24,6 +24,10 @@ export function clearSession() {
 
 export async function login(email: string, password: string) {
   const response = await authApi.login(email, password);
+  if (!["daycare_admin", "manager", "billing_manager"].includes(response.user.role)) {
+    await authApi.logout().catch(() => setBearerToken(undefined));
+    throw new Error("This account does not have access to the daycare web app.");
+  }
   storeSession(response.token, email);
   return response.user;
 }

@@ -10,14 +10,14 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  useEffect(() => { document.title = "Login | Barbaari"; }, []);
+  useEffect(() => { document.title = "Sign in | Barbaari"; }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
+      await login(email.trim(), password);
       navigate("/", { replace: true });
     } catch (err) {
       setError(getApiError(err).message);
@@ -33,14 +33,14 @@ export function LoginPage() {
           <div className="auth-mark">B</div>
           <div>
             <span>Barbaari</span>
-            <h1>Daycare login</h1>
+            <h1>Daycare sign in</h1>
             <p>Access attendance operations, billing, and organization settings.</p>
           </div>
         </div>
         <div className="auth-form">
           <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email address" required autoComplete="email" />
           <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" required autoComplete="current-password" />
-          <button className="primary" disabled={loading}>{loading ? "Signing in…" : "Login"}</button>
+          <button className="primary" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
           <div className="auth-links"><Link to="/forgot-password">Forgot password?</Link></div>
         </div>
         {error ? <Badge tone="danger">{error}</Badge> : null}

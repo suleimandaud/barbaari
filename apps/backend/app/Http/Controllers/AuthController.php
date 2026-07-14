@@ -29,13 +29,21 @@ class AuthController extends Controller
 
     public function register(Request $request)
     {
+        // Public, unauthenticated self-registration. This must never accept a
+        // client-supplied role or organization — every provider/staff account is
+        // created exclusively through the FacilityRegistrationApplication approval
+        // flow or an OrganizationInvitation, both of which set role/organization_id
+        // server-side. This endpoint only ever creates an unaffiliated parent account
+        // (the mobile app's registerParentMobile() is the sole caller, and only ever
+        // sends name/email/password — role/organization_id are intentionally ignored
+        // here even if present in the request body).
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8'],
-            'role' => ['sometimes', 'string'],
-            'organization_id' => ['sometimes', 'nullable', 'exists:organizations,id'],
         ]);
+        $data['role'] = 'parent';
+        $data['organization_id'] = null;
 
         $user = User::create($data);
         $role = Role::firstOrCreate(

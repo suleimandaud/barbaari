@@ -46,5 +46,16 @@ class AppServiceProvider extends ServiceProvider
                 ? Limit::perMinute(120)->by($request->user()->id)
                 : Limit::perMinute(30)->by($request->ip());
         });
+
+        // PIN verification (tablet signer PINs, staff PIN checks): a 4-digit PIN is only
+        // 10,000 combinations, so this must be far tighter than the general API limit —
+        // 10/min keeps legitimate retries (typos) usable while making brute-force
+        // infeasible. Keyed by device/user, not IP, since a shared tablet's IP shouldn't
+        // let one signer's failed attempts throttle a different signer on the same device.
+        RateLimiter::for('pin', function (Request $request) {
+            return Limit::perMinute(10)->by($request->user()?->id ?: $request->ip())->response(function () {
+                return response()->json(['message' => 'Too many PIN attempts. Please wait a minute and try again.'], 429);
+            });
+        });
     }
 }

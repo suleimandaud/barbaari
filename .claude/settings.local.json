@@ -64,7 +64,27 @@
       "Bash(pkill -f \"artisan serve\")",
       "Bash(curl -s -m 10 \"http://api.geonames.org/timezoneJSON?lat=47.6062&lng=-122.3321&username=demo\")",
       "Bash(curl -s -m 10 \"https://maps.googleapis.com/maps/api/timezone/json?location=47.6062,-122.3321&timestamp=1751000000\")",
-      "Bash(curl -s -m 10 \"http://www.geonames.org/export/web-services.html\")"
+      "Bash(curl -s -m 10 \"http://www.geonames.org/export/web-services.html\")",
+      "Bash(grep -n 'orgId\\($request\\)\\\\|private function orgId' app/Http/Controllers/ApiController.php)",
+      "Bash(grep -rniE \"sk_live|sk_test|pk_live|pk_test|api[_-]?key\\\\s*[:=]\\\\s*['\\\\\"][a-zA-Z0-9]|bearer [a-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,}\" apps/daycare-web/src apps/super-admin/src apps/mobile packages/shared/src)",
+      "Bash(grep -rnoE '\\(placeholder|title|alt\\)=\"[^\"]{3,80}\"' apps/daycare-web/src/pages apps/super-admin/src/pages)",
+      "Bash(grep -v -E \"package-lock\\\\.json|composer\\\\.lock|\\\\.svg$\")",
+      "Bash(xargs grep -lIE \"sk_live_|sk_test_[A-Za-z0-9]{10,}|AIza[A-Za-z0-9_-]{20,}|-----BEGIN \\(RSA|EC|OPENSSH|PGP\\) PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[A-Z0-9]{16}\")",
+      "Bash(grep -rnoE '\"\\(No [^\"]{3,80}|[A-Z][a-z]+ \\(records|found|available|yet\\)[^\"]{0,60}\\)\"' apps/daycare-web/src/pages apps/super-admin/src/pages)",
+      "Bash(grep -rnoE '\\(placeholder|title\\)=\"[^\"]{3,80}\"' apps/mobile/app)",
+      "Bash(xargs grep -nE \"\\(password|secret|api[_-]?key|token\\)['\\\\\"]?\\\\s*[:=]\\\\s*['\\\\\"][A-Za-z0-9+/=_-]{16,}['\\\\\"]\")",
+      "Bash(xargs cat)",
+      "Bash(grep -rln 'protected $fillable\\\\|protected $guarded' app/Models/)",
+      "Bash(grep -rn '::create\\($request->all\\(\\)\\)\\\\|->update\\($request->all\\(\\)\\)\\\\|->fill\\($request->all\\(\\)\\)\\\\|::create\\(\\\\$request->input\\(\\)\\)\\\\|->update\\(\\\\$request->input\\(\\)\\)' app/Http/Controllers/)",
+      "Bash(grep -rn 'protected $attributes\\\\|'\\\\''status'\\\\'' =>' app/Models/User.php)",
+      "Bash(grep -rEn \"\\(sk_live|sk_test|whsec_|AIza|AKIA\\)[A-Za-z0-9_\\\\-]{10,}\" app/ config/ routes/ database/ --include=\"*.php\")",
+      "Bash(grep *)",
+      "Bash(npm --workspace @barbaari/daycare-web run typecheck)",
+      "Bash(npm --workspace @barbaari/super-admin run typecheck)",
+      "Bash(npm --workspace @barbaari/daycare-web run build)",
+      "Bash(npm --workspace @barbaari/super-admin run build)",
+      "Bash(python3 -c \"import json; json.load\\(open\\('apps/mobile/app.json'\\)\\)\")",
+      "Bash(git check-ignore *)"
     ]
   }
 }

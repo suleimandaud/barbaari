@@ -14,7 +14,12 @@ return [
         'http://127.0.0.1:8081',
         'http://localhost:8081',
     ],
-    'allowed_origins_patterns' => ['#^https?://(localhost|127\.0\.0\.1):[0-9]+$#'],
+    // Any-port localhost/127.0.0.1 is only for local development convenience (Vite's
+    // dev-server port varies) — never allow it in production, where the explicit
+    // allowed_origins list above is the only thing that should match.
+    'allowed_origins_patterns' => env('APP_ENV') === 'production'
+        ? []
+        : ['#^https?://(localhost|127\.0\.0\.1):[0-9]+$#'],
     'allowed_headers' => ['*'],
     'exposed_headers' => [],
     'max_age' => 0,

@@ -289,9 +289,6 @@ export const billingApi = {
   },
   receiptDownload(id: string | number) {
     return data<{ message: string }>(api.get(`/billing/receipts/${id}/download`));
-  },
-  stripePlaceholder() {
-    return data<{ message: string }>(api.post("/billing/stripe/placeholder"));
   }
 };
 

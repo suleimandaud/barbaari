@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Route;
 // once the incident in TIMEZONE_PRODUCTION_DEBUG_REPORT.md is resolved.
 Route::get('_debug/timezone-lookup', [TimezoneDiagnosticsController::class, 'check'])->middleware('throttle:20,1');
 
-Route::get('public/pricing-plans', [ApiController::class, 'publicPricingPlans']);
+Route::get('public/pricing-plans', [ApiController::class, 'publicPricingPlans'])->middleware('throttle:60,1');
 Route::post('public/validate-address', [ApiController::class, 'validatePublicAddress'])->middleware('throttle:6,1');
 Route::post('registration-applications', [ApiController::class, 'createFacilityRegistrationApplication'])->middleware('throttle:10,1');
 
@@ -35,7 +35,11 @@ Route::middleware('throttle:invitations')->group(function () {
     Route::post('invitations/{token}/accept', [AuthController::class, 'acceptInvitation']);
 });
 
-Route::middleware(['auth:sanctum', 'subscription.active'])->group(function () {
+// throttle:api is applied after auth:sanctum (so it can key by the authenticated user,
+// not just IP — see AppServiceProvider::configureRateLimiting) and covers every
+// authenticated endpoint below: mobile, attendance, tablet, billing, staff, and platform
+// admin. This was previously defined but never actually attached to any route.
+Route::middleware(['auth:sanctum', 'throttle:api', 'subscription.active'])->group(function () {
     Route::get('mobile/children', [ApiController::class, 'children']);
     Route::get('mobile/attendance', [ApiController::class, 'attendance']);
     Route::get('mobile/absence-records', [ApiController::class, 'absenceRecords']);
@@ -108,7 +112,7 @@ Route::middleware(['auth:sanctum', 'subscription.active'])->group(function () {
     Route::get('tablet/bootstrap', [ApiController::class, 'tabletBootstrap'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
     Route::get('tablet/children/{child}/pickup-signers', [ApiController::class, 'tabletPickupSigners'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
     Route::get('tablet/children/{child}/signers', [ApiController::class, 'tabletChildSigners'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
-    Route::post('tablet/signers/verify-pin', [ApiController::class, 'tabletVerifySignerPin'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
+    Route::post('tablet/signers/verify-pin', [ApiController::class, 'tabletVerifySignerPin'])->middleware(['role:parent,staff,teacher,daycare_admin,manager', 'throttle:pin']);
     Route::post('tablet/attendance/guardian-check-in', [ApiController::class, 'tabletGuardianCheckIn'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
     Route::post('tablet/attendance/guardian-check-out', [ApiController::class, 'tabletGuardianCheckOut'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
     Route::post('tablet/absence-records', [ApiController::class, 'tabletCreateAbsenceRecord'])->middleware('role:parent,staff,teacher,daycare_admin,manager');
@@ -119,7 +123,6 @@ Route::middleware(['auth:sanctum', 'subscription.active'])->group(function () {
     Route::post('billing/invoices/{invoice}/payments', [ApiController::class, 'recordPayment'])->middleware('role:daycare_admin,manager,billing_manager');
     Route::get('billing/payments', [ApiController::class, 'paymentHistory']);
     Route::get('billing/receipts/{receipt}/download', [ApiController::class, 'receiptDownload']);
-    Route::post('billing/stripe/placeholder', [ApiController::class, 'stripePlaceholder']);
     Route::get('daycare/subscription', [ApiController::class, 'daycareSubscription'])->middleware('role:daycare_admin,manager');
     Route::get('daycare/billing/invoices', [ApiController::class, 'daycarePlatformInvoices'])->middleware('role:daycare_admin,manager');
     Route::get('daycare/billing/invoices/{invoice}/pdf', [ApiController::class, 'downloadInvoicePdf'])->middleware('role:daycare_admin,manager');

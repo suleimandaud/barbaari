@@ -415,6 +415,9 @@ class ApiController extends Controller
             'allergies' => ['nullable', 'array'],
         ]);
         $data['organization_id'] = $this->orgId($request);
+        if (! empty($data['classroom_id'])) {
+            Classroom::where('organization_id', $data['organization_id'])->findOrFail($data['classroom_id']);
+        }
         $data['child_code'] = $data['child_code'] ?? $this->generateChildCode($data['organization_id']);
         abort_if(
             Child::where('organization_id', $data['organization_id'])->where('child_code', $data['child_code'])->exists(),
@@ -436,6 +439,9 @@ class ApiController extends Controller
             'allergies' => ['sometimes', 'array'],
             'status' => ['sometimes', 'string'],
         ]);
+        if (! empty($data['classroom_id'])) {
+            Classroom::where('organization_id', $this->orgId($request))->findOrFail($data['classroom_id']);
+        }
         $child->update($data);
 
         return response()->json(['child' => $this->childPayload($child->fresh(['classroom', 'guardians']))]);
@@ -460,6 +466,7 @@ class ApiController extends Controller
     {
         $this->authorizeChild($request, $child);
         $data = $request->validate(['classroom_id' => ['required', 'exists:classrooms,id']]);
+        Classroom::where('organization_id', $this->orgId($request))->findOrFail($data['classroom_id']);
         $child->update($data);
 
         return response()->json(['child' => $this->childPayload($child->fresh(['classroom', 'guardians']))]);
@@ -473,6 +480,7 @@ class ApiController extends Controller
             'primary_contact' => ['sometimes', 'boolean'],
             'pickup_authorized' => ['sometimes', 'boolean'],
         ]);
+        Guardian::where('organization_id', $this->orgId($request))->findOrFail($data['guardian_id']);
         $child->guardians()->syncWithoutDetaching([$data['guardian_id'] => [
             'primary_contact' => $data['primary_contact'] ?? false,
             'pickup_authorized' => $data['pickup_authorized'] ?? true,
@@ -669,6 +677,7 @@ class ApiController extends Controller
         $child = Child::with('guardians')->findOrFail($data['child_id']);
         $tabletMode ? $this->authorizeTabletChild($request, $child) : $this->authorizeChild($request, $child);
         $this->authorizeAssistingStaff($request, $child, $data['assisting_staff_id'] ?? null);
+        $this->assertDeviceBelongsToOrganization($data['device_id'] ?? null, $child->organization_id);
         if ($tabletMode) {
             abort_unless(($data['verification_method'] ?? null) === 'pin', 422, 'Please verify the signer PIN before saving an absence.');
             abort_unless(! empty($data['pin_verification_id']), 422, 'Please verify the signer PIN before saving an absence.');
@@ -767,6 +776,7 @@ class ApiController extends Controller
         ]);
         $child = Child::findOrFail($data['child_id']);
         $this->authorizeChild($request, $child);
+        $this->assertDeviceBelongsToOrganization($data['device_id'] ?? null, $child->organization_id);
         $this->rejectUnavailableVerificationMethod($data);
         $this->consumePinVerificationIfNeeded($request, $data);
         $timezone = $this->attendanceTimezone($child->organization_id);
@@ -810,6 +820,7 @@ class ApiController extends Controller
         ]);
         $child = Child::findOrFail($data['child_id']);
         $this->authorizeChild($request, $child);
+        $this->assertDeviceBelongsToOrganization($data['device_id'] ?? null, $child->organization_id);
         $this->rejectUnavailableVerificationMethod($data);
         $this->consumePinVerificationIfNeeded($request, $data);
         $localDate = Carbon::now($this->attendanceTimezone($child->organization_id))->toDateString();
@@ -1067,6 +1078,7 @@ class ApiController extends Controller
         $child = Child::with('guardians')->findOrFail($data['child_id']);
         $tabletMode ? $this->authorizeTabletChild($request, $child) : $this->authorizeChild($request, $child);
         $this->authorizeAssistingStaff($request, $child, $data['assisting_staff_id'] ?? null);
+        $this->assertDeviceBelongsToOrganization($data['device_id'] ?? null, $child->organization_id);
         $this->rejectUnavailableVerificationMethod($data);
 
         [$guardianId, $pickupAuthorizationId, $signerName, $signerType] = $this->validatedAttendanceSigner($request, $child, $data);
@@ -1219,6 +1231,9 @@ class ApiController extends Controller
             'lead_staff_id' => ['nullable', 'exists:users,id'],
         ]);
         $data['organization_id'] = $this->orgId($request);
+        if (! empty($data['lead_staff_id'])) {
+            User::where('organization_id', $data['organization_id'])->findOrFail($data['lead_staff_id']);
+        }
 
         return response()->json(['classroom' => Classroom::create($data)->loadCount('children')], 201);
     }
@@ -1226,7 +1241,15 @@ class ApiController extends Controller
     public function updateClassroom(Request $request, Classroom $classroom)
     {
         abort_unless($classroom->organization_id === $this->orgId($request), 403);
-        $classroom->update($request->only(['name', 'capacity', 'lead_staff_id']));
+        $data = $request->validate([
+            'name' => ['sometimes', 'string', 'max:255'],
+            'capacity' => ['sometimes', 'integer', 'min:1'],
+            'lead_staff_id' => ['sometimes', 'nullable', 'exists:users,id'],
+        ]);
+        if (! empty($data['lead_staff_id'])) {
+            User::where('organization_id', $this->orgId($request))->findOrFail($data['lead_staff_id']);
+        }
+        $classroom->update($data);
 
         return response()->json(['classroom' => $classroom->fresh()->loadCount('children')]);
     }
@@ -1257,6 +1280,12 @@ class ApiController extends Controller
             'pin' => ['nullable', 'string', 'min:4', 'max:8'],
             'send_invite' => ['sometimes', 'boolean'],
         ]);
+        if ($data['role'] === 'daycare_admin' && $request->user()->role !== 'daycare_admin') {
+            abort(403, 'Only a daycare admin can grant the daycare admin role.');
+        }
+        if (! empty($data['classroom_id'])) {
+            Classroom::where('organization_id', $this->orgId($request))->findOrFail($data['classroom_id']);
+        }
 
         $user = User::create([
             'organization_id' => $this->orgId($request),
@@ -1303,6 +1332,12 @@ class ApiController extends Controller
             'title' => ['nullable', 'string', 'max:120'],
             'pin' => ['nullable', 'string', 'min:4', 'max:8'],
         ]);
+        if (isset($data['role']) && $data['role'] === 'daycare_admin' && $request->user()->role !== 'daycare_admin') {
+            abort(403, 'Only a daycare admin can grant the daycare admin role.');
+        }
+        if (! empty($data['classroom_id'])) {
+            Classroom::where('organization_id', $this->orgId($request))->findOrFail($data['classroom_id']);
+        }
         $before = $user->load('staffProfile')->toArray();
         $updates = collect($data)->except('classroom_id', 'title', 'pin')->all();
         if (! empty($data['pin'])) {
@@ -1335,6 +1370,9 @@ class ApiController extends Controller
     {
         abort_unless($user->organization_id === $this->orgId($request), 403);
         $data = $request->validate(['role' => ['required', 'in:daycare_admin,manager,staff,teacher,parent,billing_manager']]);
+        if ($data['role'] === 'daycare_admin' && $request->user()->role !== 'daycare_admin') {
+            abort(403, 'Only a daycare admin can grant the daycare admin role.');
+        }
         $user->update(['role' => $data['role']]);
         $this->syncNamedRole($user, $data['role']);
 
@@ -1359,6 +1397,9 @@ class ApiController extends Controller
     {
         abort_unless($user->organization_id === $this->orgId($request), 403);
         $data = $request->validate(['classroom_id' => ['nullable', 'exists:classrooms,id']]);
+        if (! empty($data['classroom_id'])) {
+            Classroom::where('organization_id', $this->orgId($request))->findOrFail($data['classroom_id']);
+        }
         StaffProfile::updateOrCreate(['user_id' => $user->id], ['organization_id' => $this->orgId($request), 'classroom_id' => $data['classroom_id']]);
         $this->platformAudit($request, 'staff.classroom_assigned', $user, $data);
 
@@ -1485,7 +1526,14 @@ class ApiController extends Controller
     public function createInvoice(Request $request)
     {
         $data = $request->validate(['child_id' => ['nullable', 'exists:children,id'], 'guardian_id' => ['nullable', 'exists:guardians,id'], 'amount' => ['required', 'numeric'], 'due_date' => ['required', 'date']]);
-        $data['organization_id'] = $this->orgId($request);
+        $orgId = $this->orgId($request);
+        if (! empty($data['child_id'])) {
+            Child::where('organization_id', $orgId)->findOrFail($data['child_id']);
+        }
+        if (! empty($data['guardian_id'])) {
+            Guardian::where('organization_id', $orgId)->findOrFail($data['guardian_id']);
+        }
+        $data['organization_id'] = $orgId;
         $data['invoice_number'] = 'INV-'.now()->format('YmdHis');
         $invoice = Invoice::create($data)->load('child.guardians', 'guardian');
         $this->notifications->notifyParentInvoiceCreated($invoice, $request->user());
@@ -1530,11 +1578,6 @@ class ApiController extends Controller
     public function receiptDownload()
     {
         return response()->json(['message' => 'Legacy parent billing receipts are not available in the attendance-first demo. Platform payment receipts are available from subscription billing.'], 404);
-    }
-
-    public function stripePlaceholder()
-    {
-        return response()->json(['message' => 'Stripe payment placeholder accepted.']);
     }
 
     public function daycareSubscription(Request $request)
@@ -1654,6 +1697,22 @@ class ApiController extends Controller
                 'payment_status' => $session->payment_status,
                 'message' => 'Payment not yet completed.',
             ], 422);
+        }
+
+        // The session_id is client-supplied and only proves the caller knows *a* valid,
+        // paid Stripe session — not that it's theirs. Every Barbaari checkout session is
+        // created with organization_id in its metadata (see StripeService), so this must
+        // be verified before any activation happens below, or any authenticated org admin
+        // could activate their own subscription for free by replaying any paid session id
+        // (their own from an unrelated purchase, or anyone else's if it ever leaked via a
+        // shared URL/browser history/support ticket).
+        $sessionOrgId = $this->stripeMetadata($session->metadata ?? null)['organization_id'] ?? null;
+        if ((string) $sessionOrgId !== (string) $this->orgId($request)) {
+            \Illuminate\Support\Facades\Log::warning('confirm-session: session organization does not match caller organization', [
+                'caller_organization_id' => $this->orgId($request),
+                'session_id' => $data['session_id'],
+            ]);
+            return response()->json(['message' => 'This payment session does not belong to your organization.'], 403);
         }
 
         // Best-effort: run the shared activation logic (handles emails, syncs, etc.)
@@ -1824,7 +1883,9 @@ class ApiController extends Controller
     public function sendMessage(Request $request)
     {
         $data = $request->validate(['conversation_id' => ['nullable', 'exists:conversations,id'], 'body' => ['required', 'string']]);
-        $conversation = isset($data['conversation_id']) ? Conversation::find($data['conversation_id']) : Conversation::create(['organization_id' => $this->orgId($request), 'subject' => 'New conversation']);
+        $conversation = isset($data['conversation_id'])
+            ? Conversation::where('organization_id', $this->orgId($request))->findOrFail($data['conversation_id'])
+            : Conversation::create(['organization_id' => $this->orgId($request), 'subject' => 'New conversation']);
         $message = Message::create(['conversation_id' => $conversation->id, 'sender_id' => $request->user()->id, 'body' => $data['body']]);
         $this->notifications->notifyMessageReceived($message->load('conversation'), $request->user());
 
@@ -2712,6 +2773,16 @@ class ApiController extends Controller
             return response()->json(['message' => $e->getMessage()], 200);
         }
 
+        // Stripe explicitly documents at-least-once delivery: the same event can arrive
+        // more than once (retries, redelivery). Skip re-processing an event we've already
+        // fully handled, so a duplicate delivery can never double-record a payment or
+        // double-apply a subscription state change. Still returns 200 so Stripe stops
+        // retrying — a duplicate is not an error.
+        if (PaymentProviderEvent::where('event_id', $event->id)->where('status', 'processed')->exists()) {
+            $providerEvent->update(['event_id' => $event->id, 'event_type' => $event->type, 'status' => 'duplicate_ignored']);
+            return response()->json(['received' => true, 'duplicate' => true], 200);
+        }
+
         $providerEvent->update(['event_id' => $event->id, 'event_type' => $event->type, 'status' => 'processing']);
 
         try {
@@ -3148,7 +3219,11 @@ class ApiController extends Controller
             'identifier' => ['required', 'string', 'unique:devices,identifier'],
             'classroom_id' => ['nullable', 'exists:classrooms,id'],
         ]);
-        $data['organization_id'] = $this->orgId($request);
+        $orgId = $this->orgId($request);
+        if (! empty($data['classroom_id'])) {
+            Classroom::where('organization_id', $orgId)->findOrFail($data['classroom_id']);
+        }
+        $data['organization_id'] = $orgId;
 
         return response()->json(['device' => Device::create($data)], 201);
     }
@@ -3157,6 +3232,9 @@ class ApiController extends Controller
     {
         abort_unless($device->organization_id === $this->orgId($request), 403);
         $data = $request->validate(['classroom_id' => ['nullable', 'exists:classrooms,id']]);
+        if (! empty($data['classroom_id'])) {
+            Classroom::where('organization_id', $this->orgId($request))->findOrFail($data['classroom_id']);
+        }
         $device->update($data);
 
         return response()->json(['device' => $device->fresh('classroom')]);
@@ -3227,6 +3305,13 @@ class ApiController extends Controller
     private function authorizeChild(Request $request, Child $child): void
     {
         abort_unless($this->visibleChildren($request)->where('children.id', $child->id)->exists(), 403);
+    }
+
+    private function assertDeviceBelongsToOrganization(?int $deviceId, int $organizationId): void
+    {
+        if ($deviceId) {
+            Device::where('organization_id', $organizationId)->findOrFail($deviceId);
+        }
     }
 
     private function authorizeTabletChild(Request $request, Child $child): void

@@ -16,6 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->append(\Illuminate\Http\Middleware\HandleCors::class);
+        $middleware->append(\App\Http\Middleware\AddSecurityHeaders::class);
         $middleware->alias([
             'role' => \App\Http\Middleware\EnsureRole::class,
             'subscription.active' => \App\Http\Middleware\EnsureActiveSubscription::class,

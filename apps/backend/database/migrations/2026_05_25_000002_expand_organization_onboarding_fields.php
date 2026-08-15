@@ -32,6 +32,15 @@ return new class extends Migration
 
     public function down(): void
     {
-        //
+        Schema::table('organizations', function (Blueprint $table) {
+            foreach (['legal_name', 'website', 'address', 'country', 'timezone', 'license_status'] as $column) {
+                if (Schema::hasColumn('organizations', $column)) {
+                    if ($column === 'license_status') {
+                        $table->dropIndex(['license_status']);
+                    }
+                    $table->dropColumn($column);
+                }
+            }
+        });
     }
 };

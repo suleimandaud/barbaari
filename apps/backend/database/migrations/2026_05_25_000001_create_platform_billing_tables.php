@@ -117,5 +117,25 @@ return new class extends Migration
         Schema::dropIfExists('payment_provider_events');
         Schema::dropIfExists('platform_payments');
         Schema::dropIfExists('platform_invoices');
+
+        Schema::table('subscriptions', function (Blueprint $table) {
+            foreach (['notes', 'provider', 'stripe_customer_id', 'next_invoice_at', 'paused_at', 'canceled_at', 'current_period_end', 'current_period_start', 'billing_cycle'] as $column) {
+                if (Schema::hasColumn('subscriptions', $column)) {
+                    $table->dropColumn($column);
+                }
+            }
+        });
+
+        Schema::table('pricing_plans', function (Blueprint $table) {
+            foreach (['stripe_yearly_price_id', 'stripe_monthly_price_id', 'stripe_product_id', 'device_limit', 'currency'] as $column) {
+                if (Schema::hasColumn('pricing_plans', $column)) {
+                    $table->dropColumn($column);
+                }
+            }
+            if (Schema::hasColumn('pricing_plans', 'code')) {
+                $table->dropUnique(['code']);
+                $table->dropColumn('code');
+            }
+        });
     }
 };

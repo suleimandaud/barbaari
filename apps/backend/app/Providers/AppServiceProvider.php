@@ -42,9 +42,13 @@ class AppServiceProvider extends ServiceProvider
 
         // General API: 120 per minute per user or IP
         RateLimiter::for('api', function (Request $request) {
-            return $request->user()
+            $limit = $request->user()
                 ? Limit::perMinute(120)->by($request->user()->id)
                 : Limit::perMinute(30)->by($request->ip());
+
+            return $limit->response(function () {
+                return response()->json(['message' => 'Too many requests. Please wait a moment and try again.'], 429);
+            });
         });
 
         // PIN verification (tablet signer PINs, staff PIN checks): a 4-digit PIN is only

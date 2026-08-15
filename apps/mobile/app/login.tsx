@@ -94,7 +94,7 @@ export default function Login() {
             <Ionicons name="lock-closed-outline" size={18} color="white" />
             <Text style={styles.primaryText}>{signingIn ? "Signing in…" : "Sign in securely"}</Text>
           </Pressable>
-          <Pressable onPress={registerParent} style={styles.secondaryButton}>
+          <Pressable disabled={signingIn || registering} onPress={registerParent} style={[styles.secondaryButton, (signingIn || registering) && styles.disabledButton]}>
             <Ionicons name={mode === "parent" ? "person-add-outline" : "business-outline"} size={18} color={colors.primary} />
             <Text style={styles.secondaryText}>{mode === "parent" ? (registering ? "Registering..." : "Register parent account") : "Staff registration info"}</Text>
           </Pressable>

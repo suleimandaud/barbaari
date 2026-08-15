@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getApiError } from "@barbaari/shared";
 import { restoreToken } from "../services/auth";
 
@@ -6,22 +6,30 @@ export function useApiResource<T>(loader: () => Promise<T>, deps: unknown[] = []
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const requestIdRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const reload = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError("");
     try {
       await restoreToken();
-      setData(await loader());
+      const result = await loader();
+      if (mountedRef.current && requestId === requestIdRef.current) setData(result);
     } catch (err) {
-      setError(getApiError(err).message);
+      if (mountedRef.current && requestId === requestIdRef.current) setError(getApiError(err).message);
     } finally {
-      setLoading(false);
+      if (mountedRef.current && requestId === requestIdRef.current) setLoading(false);
     }
   }, deps);
 
   useEffect(() => {
+    mountedRef.current = true;
     void reload();
+    return () => {
+      mountedRef.current = false;
+    };
   }, [reload]);
 
   return { data, loading, error, reload };

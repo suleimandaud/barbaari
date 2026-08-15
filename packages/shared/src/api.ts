@@ -6,7 +6,14 @@ export const API_BASE_URL = env.EXPO_PUBLIC_API_URL || env.VITE_API_URL || "http
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  headers: { Accept: "application/json", "Content-Type": "application/json" }
+  headers: { Accept: "application/json", "Content-Type": "application/json" },
+  // Without this, a stalled connection (dead wifi, server hang) leaves a request pending
+  // indefinitely — the UI just spins forever with no way to recover short of a manual
+  // refresh. 30s is generous enough to cover the slowest legitimate request in the app
+  // (address validation, which chains USPS + geocoding + a multi-provider timezone
+  // lookup with retries on the backend) while still guaranteeing the UI eventually gets
+  // a clear, actionable error instead of hanging.
+  timeout: 30000
 });
 
 export type ApiError = { message: string; status?: number; errors?: Record<string, string[]> };
@@ -23,6 +30,29 @@ export function getApiError(error: unknown): ApiError {
     const err = error as AxiosError<any>;
     const errors = err.response?.data?.errors as Record<string, string[]> | undefined;
     const firstFieldMessage = errors ? Object.values(errors).flat().find((message) => typeof message === "string") : undefined;
+
+    // No response at all means the request never completed a round trip — offline,
+    // timed out, DNS failure, server unreachable. These deserve a specific, actionable
+    // message instead of axios's raw "Network Error" / "timeout of 30000ms exceeded".
+    if (!err.response) {
+      const isOffline = typeof navigator !== "undefined" && "onLine" in navigator && navigator.onLine === false;
+      if (isOffline) {
+        return { message: "You're offline. Please check your connection and try again." };
+      }
+      if (err.code === "ECONNABORTED" || /timeout/i.test(err.message || "")) {
+        return { message: "That took too long to respond. Please check your connection and try again." };
+      }
+      return { message: "We couldn't reach the server. Please check your connection and try again." };
+    }
+
+    if (err.response.status === 429) {
+      return {
+        message: firstFieldMessage || err.response.data?.message || "Too many requests. Please wait a moment and try again.",
+        status: 429,
+        errors
+      };
+    }
+
     return {
       message: firstFieldMessage || err.response?.data?.message || err.message || "Request failed",
       status: err.response?.status,

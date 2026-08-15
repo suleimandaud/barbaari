@@ -38,17 +38,35 @@ export default function Staff() {
   async function saveNote(child: Child) {
     const note = drafts[child.id] || "";
     if (!note.trim()) return;
-    await mobileApi.createNote({ child_id: child.id, note });
-    setDrafts({ ...drafts, [child.id]: "" });
-    await reload();
+    try {
+      await mobileApi.createNote({ child_id: child.id, note });
+      setDrafts({ ...drafts, [child.id]: "" });
+      await reload();
+    } catch (error) {
+      Alert.alert("Could not save note", error instanceof Error ? error.message : "Please try again.");
+    }
   }
 
   async function saveIncident(child: Child) {
     const summary = drafts[child.id] || "";
     if (!summary.trim()) return;
-    await mobileApi.createIncident({ child_id: child.id, severity: "low", summary, status: "draft" });
-    setDrafts({ ...drafts, [child.id]: "" });
-    await reload();
+    try {
+      await mobileApi.createIncident({ child_id: child.id, severity: "low", summary, status: "draft" });
+      setDrafts({ ...drafts, [child.id]: "" });
+      await reload();
+    } catch (error) {
+      Alert.alert("Could not create incident", error instanceof Error ? error.message : "Please try again.");
+    }
+  }
+
+  async function staffSelfCheck(direction: "in" | "out") {
+    try {
+      if (direction === "in") await mobileApi.staffCheckIn();
+      else await mobileApi.staffCheckOut();
+      Alert.alert("Saved", direction === "in" ? "You are checked in." : "You are checked out.");
+    } catch (error) {
+      Alert.alert("Could not save", error instanceof Error ? error.message : "Please try again.");
+    }
   }
 
   async function markAbsent(child: Child) {
@@ -110,8 +128,8 @@ export default function Staff() {
           <Text style={styles.muted}>PIN verification is active for staff attendance actions.</Text>
         </View>
         <View style={styles.actionGrid}>
-          <Button onPress={() => mobileApi.staffCheckIn()}>Staff check in</Button>
-          <Button variant="secondary" onPress={() => mobileApi.staffCheckOut()}>Staff check out</Button>
+          <Button onPress={() => staffSelfCheck("in")}>Staff check in</Button>
+          <Button variant="secondary" onPress={() => staffSelfCheck("out")}>Staff check out</Button>
         </View>
         {children.map((child) => (
           <Card key={child.id}>

@@ -4,12 +4,33 @@
     "slug": "barbaari-mobile",
     "scheme": "barbaari",
     "version": "0.1.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "userInterfaceStyle": "light",
-    "assetBundlePatterns": ["**/*"],
-    "plugins": ["expo-router", "expo-secure-store", "expo-notifications"],
-    "extra": {
-      "apiUrl": "https://api.barbaari.local/api"
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-notifications",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Barbaari needs your location to confirm attendance is being recorded at the daycare's registered address."
+        }
+      ],
+      "expo-font"
+    ],
+    "ios": {
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Barbaari needs your location to confirm attendance is being recorded at the daycare's registered address."
+      }
+    },
+    "android": {
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
     }
   }
 }

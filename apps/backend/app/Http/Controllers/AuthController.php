@@ -17,6 +17,7 @@ use App\Services\SubscriptionAccessService;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\DB;
@@ -68,6 +69,14 @@ class AuthController extends Controller
         $user = User::where('email', $credentials['email'])->first();
 
         if (! $user || ! Hash::check($credentials['password'], $user->password)) {
+            // Logged (never the password itself) so a "did someone try to break into this
+            // account" question is answerable — the API response stays identical either
+            // way (see below) so this does not create a user-enumeration side channel.
+            Log::warning('Login failed.', [
+                'email' => $credentials['email'],
+                'user_exists' => (bool) $user,
+                'ip' => $request->ip(),
+            ]);
             throw ValidationException::withMessages(['email' => ['The provided credentials are incorrect.']]);
         }
 
@@ -245,9 +254,9 @@ class AuthController extends Controller
                 $resetUrl = rtrim($this->passwordResetFrontendUrl($user), '/')
                     .'/reset-password?token='.$token.'&email='.urlencode($user->email);
 
-                Mail::queue('emails.password-reset', ['resetUrl' => $resetUrl], function ($message) use ($user) {
+                $this->queueMailSafely(fn () => Mail::queue('emails.password-reset', ['resetUrl' => $resetUrl], function ($message) use ($user) {
                     $message->to($user->email)->subject('Reset your Barbaari password');
-                });
+                }), 'forgot-password reset link');
             }
         );
 
@@ -295,9 +304,9 @@ class AuthController extends Controller
                 $resetUrl = rtrim($this->passwordResetFrontendUrl($user), '/')
                     .'/reset-password?token='.$token.'&email='.urlencode($user->email);
 
-                Mail::queue('emails.password-reset', ['resetUrl' => $resetUrl], function ($message) use ($user) {
+                $this->queueMailSafely(fn () => Mail::queue('emails.password-reset', ['resetUrl' => $resetUrl], function ($message) use ($user) {
                     $message->to($user->email)->subject('Reset your Barbaari password');
-                });
+                }), 'admin-triggered password reset smoke test');
             }
         );
 
@@ -329,6 +338,22 @@ class AuthController extends Controller
         }
 
         return config('app.daycare_web_url', config('app.frontend_url', 'http://localhost:5173'));
+    }
+
+    /**
+     * An email failing to send (SMTP down, mail server slow, DNS blip) must never turn an
+     * otherwise-successful business action into a failed request for the user. Log it for
+     * ops and move on.
+     */
+    private function queueMailSafely(\Closure $dispatch, string $context): void
+    {
+        try {
+            $dispatch();
+        } catch (\Throwable $exception) {
+            \Illuminate\Support\Facades\Log::error("Failed to queue email: {$context}", [
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     public function acceptInvitation(Request $request, string $token)
@@ -573,7 +598,7 @@ class AuthController extends Controller
             'subscription_id' => $subscription->id,
             'invoice_number' => 'PLAT-'.now()->format('YmdHis').'-'.Str::upper(Str::random(4)),
             'billing_period_start' => now()->toDateString(),
-            'billing_period_end' => optional($subscription->current_period_end)->toDateString() ?? now()->addMonth()->toDateString(),
+            'billing_period_end' => optional($subscription->current_period_end)->toDateString() ?? Subscription::periodEnd($subscription->billing_cycle, now())->toDateString(),
             'due_date' => now()->addDays(7)->toDateString(),
             'currency' => $plan->currency ?? 'USD',
             'subtotal' => $amount,

@@ -5,7 +5,9 @@ namespace App\Services;
 use App\Models\Organization;
 use App\Models\PlatformInvoice;
 use App\Models\Subscription;
+use Stripe\ApiRequestor;
 use Stripe\Checkout\Session as CheckoutSession;
+use Stripe\HttpClient\CurlClient;
 use Stripe\StripeClient;
 
 class StripeService
@@ -20,6 +22,15 @@ class StripeService
     public function client(): StripeClient
     {
         if (! $this->client) {
+            // The SDK's own defaults (80s total / 30s connect) are far too long for a
+            // synchronous, user-facing request — every other external dependency in this
+            // app (USPS, geocoding, timezone lookups) already has an explicit short
+            // timeout; Stripe was the one gap.
+            $curlClient = new CurlClient();
+            $curlClient->setTimeout(15);
+            $curlClient->setConnectTimeout(5);
+            ApiRequestor::setHttpClient($curlClient);
+
             $this->client = new StripeClient(config('services.stripe.secret'));
         }
 

@@ -12,8 +12,15 @@ export function SubscriptionSuccessPage() {
   const sessionId = searchParams.get("session_id");
   const isTest = searchParams.get("test") === "1";
 
-  const [phase, setPhase] = useState<Phase>(sessionId ? "confirming" : "success");
-  const [errorMsg, setErrorMsg] = useState("");
+  // A missing session_id is only ever expected for the explicit test-payment path
+  // (?test=1). Any other way of landing here without one — a stale bookmark, a broken
+  // redirect, a manually-edited URL — must not claim success without ever confirming
+  // anything with the backend.
+  const initialPhase: Phase = isTest ? "success" : sessionId ? "confirming" : "error";
+  const [phase, setPhase] = useState<Phase>(initialPhase);
+  const [errorMsg, setErrorMsg] = useState(
+    initialPhase === "error" ? "We couldn't find your payment session. If you completed checkout, please check your subscription status or contact support." : ""
+  );
   const [subscription, setSubscription] = useState<any>(null);
   const [countdown, setCountdown] = useState(REDIRECT_SECONDS);
 

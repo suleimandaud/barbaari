@@ -40,7 +40,16 @@ class SubscriptionAccessService
         }
 
         if ($subscription->status === 'active') {
-            return false;
+            // `status` is only updated by an external event (a Stripe webhook, a manual
+            // status change) — nothing flips it the instant a 30-day period elapses. The
+            // period end itself is therefore the authoritative expiration check: a
+            // subscription whose current_period_end/current_period_ends_at has already
+            // passed must not keep granting access just because no webhook has landed yet
+            // to say so. A subscription with no period end recorded (e.g. lifetime/manual
+            // grants) is treated as active with no expiration.
+            $periodEnd = $subscription->current_period_end ?? $subscription->current_period_ends_at;
+
+            return $periodEnd ? $periodEnd->isPast() : false;
         }
 
         if ($subscription->status === 'trialing') {
@@ -76,6 +85,17 @@ class SubscriptionAccessService
                 'subscription_status' => $subscription->status,
                 'reason' => 'Trial period has expired.',
             ];
+        }
+
+        if ($subscription->status === 'active') {
+            $periodEnd = $subscription->current_period_end ?? $subscription->current_period_ends_at;
+            if ($periodEnd?->isPast()) {
+                return [
+                    'requires_payment' => true,
+                    'subscription_status' => $subscription->status,
+                    'reason' => 'Subscription period has expired.',
+                ];
+            }
         }
 
         return [

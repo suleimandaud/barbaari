@@ -9,6 +9,7 @@ import { ErrorAlert, SuccessAlert } from "../components/Alerts";
 import { ChildSelect, ClassroomSelect } from "../components/Selects";
 import { Modal } from "../components/Modal";
 import { useAsyncData } from "../hooks/useAsyncData";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { childLabel, friendlyError } from "../utils/labels";
 
 const attendanceTabs = [
@@ -45,6 +46,16 @@ function absenceLabel(value: string) {
   return absenceTypes.find(([id]) => id === value)?.[1] ?? value.replace(/_/g, " ");
 }
 
+function geolocationErrorMessage(error: GeolocationPositionError): string {
+  // A GPS timeout or hardware-unavailable reading is common (weak signal indoors) and
+  // should not be reported the same as an actual permission denial — that sends staff
+  // hunting through permission settings that are already fine.
+  if (error.code === error.PERMISSION_DENIED) return "Location access is blocked for this browser. Please allow location access and try again.";
+  if (error.code === error.POSITION_UNAVAILABLE) return "This device could not determine its location. Please try again or move to an area with a clearer signal.";
+  if (error.code === error.TIMEOUT) return "Getting your location took too long. Please try again.";
+  return "We could not determine your location. Please try again.";
+}
+
 function browserLocation(): Promise<{ latitude: number; longitude: number }> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -53,13 +64,14 @@ function browserLocation(): Promise<{ latitude: number; longitude: number }> {
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
-      () => reject(new Error("Location permission is required for attendance. Allow location access and try again.")),
+      (error) => reject(new Error(geolocationErrorMessage(error))),
       { timeout: 8000, maximumAge: 30000, enableHighAccuracy: true }
     );
   });
 }
 
 export function AttendancePage() {
+  const isOnline = useOnlineStatus();
   const [searchParams, setSearchParams] = useSearchParams();
   const { data, loading, error, reload } = useAsyncData(async () => {
     const [attendance, absences, children, classrooms, auditLogs, organization] = await Promise.all([
@@ -174,6 +186,11 @@ export function AttendancePage() {
     setSaving(true);
     setActionError("");
     setSuccess("");
+    if (!isOnline) {
+      setActionError("You're offline. Please reconnect and try again.");
+      setSaving(false);
+      return;
+    }
     try {
       await action();
       setSuccess(message);
@@ -474,6 +491,11 @@ export function AttendancePage() {
     setSaving(true);
     setActionError("");
     setKioskSuccess("");
+    if (!isOnline) {
+      setActionError("You're offline. Please reconnect and try again.");
+      setSaving(false);
+      return;
+    }
     try {
       if (kioskAction === "absent") {
         await absenceApi.create({
@@ -553,6 +575,7 @@ export function AttendancePage() {
   return (
     <section className="page">
       <PageHeader eyebrow="Compliance core" title="Attendance Operations" description={isFamilyChildCare ? "Manage child-based check-ins, check-outs, absences, signatures, geofence verification, and attendance records in one workspace." : "Manage live check-ins, tablet/kiosk mode, absences, early checkouts, missing checkouts, and attendance records in one workspace."} action={<button className="primary" onClick={openKioskMode}>Open tablet / kiosk mode</button>} />
+      {!isOnline ? <div className="alert-banner warning">You're offline. Attendance actions require a connection — reconnect before recording check-ins or check-outs.</div> : null}
       <SuccessAlert message={success} />
       <ErrorAlert message={actionError} />
 

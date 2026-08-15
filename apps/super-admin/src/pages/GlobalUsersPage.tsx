@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { authApi, superAdminApi } from "@barbaari/shared";
 import { Alert, Badge, DataTable, ErrorState, Header, LoadingState, Modal } from "../components/Ui";
 import { useAsyncData } from "../hooks/useAsyncData";
@@ -8,10 +8,19 @@ const roles = ["super_admin", "daycare_admin", "manager", "teacher", "staff", "p
 
 export function GlobalUsersPage() {
   const [filters, setFilters] = useState({ search: "", role: "", organization_id: "", status: "" });
+  // The search box updates on every keystroke for instant visual feedback, but the value
+  // actually used to trigger a request is debounced — without this, fast typing fired a
+  // full re-fetch (users + organizations + me) on every character.
+  const [debouncedSearch, setDebouncedSearch] = useState(filters.search);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(filters.search), 300);
+    return () => clearTimeout(timer);
+  }, [filters.search]);
+
   const { data, loading, error, reload } = useAsyncData(async () => {
-    const [users, organizations, me] = await Promise.all([superAdminApi.filteredUsers(filters), superAdminApi.organizations(), authApi.me()]);
+    const [users, organizations, me] = await Promise.all([superAdminApi.filteredUsers({ ...filters, search: debouncedSearch }), superAdminApi.organizations(), authApi.me()]);
     return { users: users.users, organizations: organizations.organizations, me: me.user };
-  }, [filters.search, filters.role, filters.organization_id, filters.status]);
+  }, [debouncedSearch, filters.role, filters.organization_id, filters.status]);
   const [selected, setSelected] = useState<any | null>(null);
   const [roleUser, setRoleUser] = useState<any | null>(null);
   const [nextRole, setNextRole] = useState("");

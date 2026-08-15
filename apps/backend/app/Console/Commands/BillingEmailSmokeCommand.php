@@ -60,8 +60,20 @@ class BillingEmailSmokeCommand extends Command
             ])->load('organization');
         }
 
-        Mail::to($to ?: $invitation->email)->queue(new OrganizationInvitationMail($invitation));
-        Mail::to($to ?: ($invoice->organization?->email ?: $invitation->email))->queue(new PlatformInvoiceMail($invoice));
+        // This command's entire purpose is verifying email delivery, so a failure here
+        // must be reported, not silently swallowed (unlike the request-path
+        // queueMailSafely() helper, whose job is the opposite — never let an email
+        // failure break a real user action). Each email is sent independently so one
+        // failure doesn't stop the rest of the smoke test from running, and every
+        // outcome is reported so an operator can see exactly which email(s) failed.
+        $results = [];
+
+        $results['organization invitation'] = $this->smokeSend(
+            fn () => Mail::to($to ?: $invitation->email)->queue(new OrganizationInvitationMail($invitation))
+        );
+        $results['platform invoice'] = $this->smokeSend(
+            fn () => Mail::to($to ?: ($invoice->organization?->email ?: $invitation->email))->queue(new PlatformInvoiceMail($invoice))
+        );
 
         $adminEmail = $subscription->organization?->users()
             ->whereIn('role', ['daycare_admin', 'manager'])
@@ -70,28 +82,47 @@ class BillingEmailSmokeCommand extends Command
         $adminEmail ??= \App\Models\User::whereIn('role', ['daycare_admin', 'manager'])
             ->where('status', 'active')
             ->value('email');
-        Mail::to($to ?: ($adminEmail ?: $invitation->email))->queue(new SubscriptionActivatedMail($subscription));
+        $results['subscription activated'] = $this->smokeSend(
+            fn () => Mail::to($to ?: ($adminEmail ?: $invitation->email))->queue(new SubscriptionActivatedMail($subscription))
+        );
 
         $passwordResetAccountEmail = $adminEmail ?: $invitation->email;
         $passwordResetRecipient = $to ?: $passwordResetAccountEmail;
-        Password::sendResetLink(
-            ['email' => $passwordResetAccountEmail],
-            function ($user, string $token) use ($passwordResetRecipient) {
-                $resetUrl = rtrim(config('app.frontend_url', 'http://localhost:5173'), '/')
-                    .'/reset-password?token='.$token.'&email='.urlencode($user->email);
+        $results['password reset'] = $this->smokeSend(function () use ($passwordResetAccountEmail, $passwordResetRecipient) {
+            Password::sendResetLink(
+                ['email' => $passwordResetAccountEmail],
+                function ($user, string $token) use ($passwordResetRecipient) {
+                    $resetUrl = rtrim(config('app.frontend_url', 'http://localhost:5173'), '/')
+                        .'/reset-password?token='.$token.'&email='.urlencode($user->email);
 
-                Mail::send('emails.password-reset', ['resetUrl' => $resetUrl], function ($message) use ($passwordResetRecipient) {
-                    $message->to($passwordResetRecipient)->subject('Reset your Barbaari password');
-                });
-            }
-        );
+                    Mail::send('emails.password-reset', ['resetUrl' => $resetUrl], function ($message) use ($passwordResetRecipient) {
+                        $message->to($passwordResetRecipient)->subject('Reset your Barbaari password');
+                    });
+                }
+            );
+        });
 
-        $this->info('Queued organization invitation, platform invoice, subscription activated, and password reset smoke emails.');
+        foreach ($results as $label => $succeeded) {
+            $succeeded ? $this->info("✓ {$label} email queued.") : $this->error("✗ {$label} email FAILED — see log for details.");
+        }
         $this->line('Mailer: '.config('mail.default'));
         $this->line('Queue: '.config('queue.default'));
         $this->line('Recipient override: '.($to ?: 'not used'));
         $this->line('Password reset token generated: '.(DB::table('password_reset_tokens')->where('email', $passwordResetAccountEmail)->exists() ? 'yes' : 'no'));
 
-        return self::SUCCESS;
+        return in_array(false, $results, true) ? self::FAILURE : self::SUCCESS;
+    }
+
+    private function smokeSend(\Closure $send): bool
+    {
+        try {
+            $send();
+
+            return true;
+        } catch (\Throwable $exception) {
+            \Illuminate\Support\Facades\Log::error('Email smoke test send failed.', ['error' => $exception->getMessage()]);
+
+            return false;
+        }
     }
 }

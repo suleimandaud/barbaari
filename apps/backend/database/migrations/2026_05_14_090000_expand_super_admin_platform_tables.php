@@ -47,5 +47,29 @@ return new class extends Migration
     public function down(): void
     {
         Schema::dropIfExists('support_ticket_comments');
+
+        Schema::table('system_alerts', function (Blueprint $table) {
+            if (Schema::hasColumn('system_alerts', 'type')) {
+                $table->dropIndex(['type']);
+                $table->dropColumn('type');
+            }
+        });
+
+        Schema::table('support_tickets', function (Blueprint $table) {
+            if (Schema::hasColumn('support_tickets', 'assigned_to')) {
+                $table->dropConstrainedForeignId('assigned_to');
+            }
+        });
+
+        Schema::table('pricing_plans', function (Blueprint $table) {
+            foreach (['featured', 'status', 'staff_limit', 'yearly_price'] as $column) {
+                if (Schema::hasColumn('pricing_plans', $column)) {
+                    if ($column === 'status') {
+                        $table->dropIndex(['status']);
+                    }
+                    $table->dropColumn($column);
+                }
+            }
+        });
     }
 };

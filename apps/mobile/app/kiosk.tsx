@@ -1,25 +1,35 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Location from "expo-location";
+import * as Network from "expo-network";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, KeyboardAvoidingView, PanResponder, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { DEFAULT_ATTENDANCE_TIMEZONE, colors, formatAttendanceTime, getApiError } from "@barbaari/shared";
 import { Button, Badge } from "../components/Ui";
+import { SubscriptionRequiredScreen } from "../components/SubscriptionRequiredScreen";
 import { useMobileSession } from "../hooks/useMobileSession";
 import { unlockTablet } from "../services/auth";
 import { mobileApi } from "../services/mobileApi";
 import type { MobileUser } from "../services/auth";
 
-type Step = "welcome" | "classroom" | "child" | "action" | "signer" | "verify" | "signature" | "confirm";
-type Action = "in" | "out" | "absent" | "early";
+type Step = "welcome" | "subscription" | "classroom" | "child" | "action" | "signer" | "verify" | "signature" | "confirm";
+// Only two real tablet-initiated attendance actions exist on the backend. "Early
+// checkout"/"missing checkout" are NOT distinct actions anywhere in the API — they are
+// status labels the backend computes after the fact by comparing check-out time against
+// the organization's configured day-end time (ApiController::attendanceStatus). A prior
+// version of this screen sent a client-side `early_checkout` flag that the backend never
+// reads (confirmed: zero references in ApiController.php) — that was dead/fake signal,
+// removed rather than kept, per "do not duplicate or fabricate backend logic."
+type Action = "in" | "out" | "absent";
 type Point = { x: number; y: number };
 type AbsenceType = "excused" | "unexcused" | "sick" | "vacation" | "no_show" | "other";
+type ChildStatus = "not checked in" | "checked in" | "checked out" | "early checkout" | "missing checkout" | "absent";
 
 const actionLabels: Record<Action, string> = {
   in: "Check in",
   out: "Check out",
-  absent: "Mark absent",
-  early: "Early checkout"
+  absent: "Mark absent"
 };
 
 const absenceTypes: Array<[AbsenceType, string]> = [
@@ -34,15 +44,14 @@ const absenceTypes: Array<[AbsenceType, string]> = [
 const actionTone: Record<Action, string> = {
   in: colors.primary,
   out: colors.neutral,
-  absent: colors.tertiary,
-  early: colors.secondary
+  absent: colors.tertiary
 };
 
 function absenceLabel(value: AbsenceType) {
   return absenceTypes.find(([id]) => id === value)?.[1] ?? value.replace("_", " ");
 }
 
-function statusFor(child: any, attendance: any[], absences: any[], localDate: string) {
+function statusFor(child: any, attendance: any[], absences: any[], localDate: string): ChildStatus {
   const record = attendance.find((item) => String(item.childId) === String(child.id) && item.date === localDate);
   const absence = absences.find((item) => String(item.childId) === String(child.id) && (item.absenceDate ?? item.absence_date) === localDate);
   if (absence) return "absent";
@@ -53,19 +62,61 @@ function statusFor(child: any, attendance: any[], absences: any[], localDate: st
   return "checked in";
 }
 
-function deviceLocation(): Promise<{ latitude: number; longitude: number }> {
-  return new Promise((resolve, reject) => {
-    const geo = globalThis.navigator?.geolocation;
-    if (!geo) {
-      reject(new Error("Device location is required for attendance. Enable location services for this tablet."));
-      return;
-    }
-    geo.getCurrentPosition(
-      (position) => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude }),
-      () => reject(new Error("Location permission is required for attendance. Allow location access and try again.")),
-      { timeout: 10000, maximumAge: 30000, enableHighAccuracy: true }
-    );
+// Backend is the source of truth for status; this only decides which buttons a status
+// makes valid — it never invents a new status or duplicates how the backend computes one.
+function actionsForStatus(status: ChildStatus): Action[] {
+  if (status === "not checked in") return ["in", "absent"];
+  if (status === "checked in") return ["out"];
+  return []; // checked out / early checkout / missing checkout / absent — day is resolved
+}
+
+function isSubscriptionRequiredError(err: unknown): boolean {
+  return getApiError(err).status === 402;
+}
+
+// A GPS timeout or hardware-unavailable reading is common (weak signal indoors) and
+// should not be reported the same as an actual permission denial — that sends staff
+// hunting through device settings that are already fine.
+async function deviceLocation(): Promise<{ latitude: number; longitude: number }> {
+  const existing = await Location.getForegroundPermissionsAsync();
+  let permission = existing;
+  if (permission.status !== Location.PermissionStatus.GRANTED) {
+    permission = await Location.requestForegroundPermissionsAsync();
+  }
+  if (permission.status !== Location.PermissionStatus.GRANTED) {
+    throw new Error("Location access is blocked for this device. Please allow location access in device settings and try again.");
+  }
+
+  const servicesEnabled = await Location.hasServicesEnabledAsync();
+  if (!servicesEnabled) {
+    throw new Error("This device's location services (GPS) are turned off. Please enable them and try again.");
+  }
+
+  const TIMEOUT_MS = 10000;
+  let timeoutHandle: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => reject(new Error("Getting your location took too long. Please try again.")), TIMEOUT_MS);
   });
+
+  try {
+    const position = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+      timeout
+    ]);
+    return { latitude: position.coords.latitude, longitude: position.coords.longitude };
+  } catch (error) {
+    if (error instanceof Error && /took too long/.test(error.message)) throw error;
+    throw new Error("This device could not determine its location. Please try again or move to an area with a clearer signal.");
+  } finally {
+    clearTimeout(timeoutHandle!);
+  }
+}
+
+async function assertOnline() {
+  const state = await Network.getNetworkStateAsync();
+  if (!state.isConnected || state.isInternetReachable === false) {
+    throw new Error("Connection lost. Attendance cannot be recorded while this tablet is offline.");
+  }
 }
 
 export default function Kiosk() {
@@ -81,6 +132,11 @@ export default function Kiosk() {
   const [unlockedUser, setUnlockedUser] = useState<MobileUser | null>(null);
   const [data, setData] = useState<{ children: any[]; classrooms: any[]; attendance: any[]; absences: any[]; staff?: any[]; timezone?: string; localDate?: string; scopeLabel?: string; facility_type?: string; facilityType?: string; uses_classrooms?: boolean } | null>(null);
   const [selectedClassroomId, setSelectedClassroomId] = useState("");
+  // "" is a valid, deliberate choice (the "All classrooms" tile), so it can't double as
+  // "no choice made yet" — this tracks whether the classroom step has been passed at
+  // least once this unlocked session, so auto-reset knows to skip straight to the
+  // children list instead of re-prompting for a classroom after every single child.
+  const [classroomScopeChosen, setClassroomScopeChosen] = useState(false);
   const [selectedChildId, setSelectedChildId] = useState("");
   const [selectedAction, setSelectedAction] = useState<Action>("in");
   const [signers, setSigners] = useState<any[]>([]);
@@ -124,6 +180,18 @@ export default function Kiosk() {
     return () => clearTimeout(timer);
   }, [confirmation]);
 
+  // Separate from the 5s post-success reset above: a mid-flow idle tablet (someone walks
+  // away while a child/signer/PIN entry/signature is on screen) must not sit there
+  // indefinitely showing that child's and signer's information. Any interaction with the
+  // tracked fields below restarts the clock; only these steps carry sensitive per-child
+  // state worth guarding, so "welcome"/"classroom"/"subscription" are exempt.
+  useEffect(() => {
+    const sensitiveSteps: Step[] = ["action", "signer", "verify", "signature"];
+    if (!sensitiveSteps.includes(step)) return;
+    const timer = setTimeout(() => startOver(), 90000);
+    return () => clearTimeout(timer);
+  }, [step, selectedChildId, selectedAction, selectedSignerKey, pin, signatureName, points.length, absenceType, absenceReason, absenceNotes]);
+
   async function loadTabletData(selectedMode = mode) {
     setSaving(true);
     setMessage("");
@@ -138,7 +206,15 @@ export default function Kiosk() {
       }
       setData(response);
       setStep(usesClassrooms ? "classroom" : "child");
-    } catch {
+    } catch (err) {
+      // Every tablet call is behind EnsureActiveSubscription, so a 402 here can happen
+      // even after a successful unlock (e.g. the org's subscription lapses mid-session,
+      // or a retry after unlock). Never cache past this — re-check on every call, every
+      // time, and never let stale local state imply access that the backend just revoked.
+      if (isSubscriptionRequiredError(err)) {
+        setStep("subscription");
+        return;
+      }
       setLoadError("Could not load attendance tablet records. Check backend connection or account permissions.");
       setStep("welcome");
     } finally {
@@ -162,6 +238,10 @@ export default function Kiosk() {
       await refresh();
       await loadTabletData(mode);
     } catch (err) {
+      if (isSubscriptionRequiredError(err)) {
+        setStep("subscription");
+        return;
+      }
       const apiError = getApiError(err);
       const formMessage = apiError.errors?.pin?.[0] ?? apiError.errors?.password_or_pin?.[0] ?? apiError.errors?.guardian?.[0] ?? apiError.errors?.email?.[0];
       Alert.alert("Unlock failed", formMessage ?? apiError.message ?? "The selected mode credentials were not accepted.");
@@ -179,8 +259,15 @@ export default function Kiosk() {
       setSelectedSignerKey("");
       setSignatureName("");
       setPoints([]);
+      const status = statusFor(child, data?.attendance ?? [], data?.absences ?? [], data?.localDate ?? "");
+      const allowed = actionsForStatus(status);
+      setSelectedAction(allowed[0] ?? "in");
       setStep("action");
-    } catch {
+    } catch (err) {
+      if (isSubscriptionRequiredError(err)) {
+        setStep("subscription");
+        return;
+      }
       Alert.alert("Could not load signers", "Authorized guardians and pickup people could not be loaded.");
     } finally {
       setSaving(false);
@@ -220,6 +307,10 @@ export default function Kiosk() {
       setPin("");
       setStep("signature");
     } catch (err) {
+      if (isSubscriptionRequiredError(err)) {
+        setStep("subscription");
+        return;
+      }
       Alert.alert("PIN not verified", getApiError(err).message || "Incorrect signer PIN.");
     } finally {
       setSaving(false);
@@ -247,6 +338,11 @@ export default function Kiosk() {
 
     setSaving(true);
     try {
+      // Checked before anything else — GPS/PIN verification succeeding while offline
+      // would just fail confusingly at the final save. Never queue and retry later: a
+      // queued-then-replayed attendance write risks a duplicate or a stale-location save,
+      // exactly what the backend's idempotency/geofence checks exist to prevent.
+      await assertOnline();
       if (selectedAction === "absent") {
         await mobileApi.markAbsent({ child_id: selectedChild.id, absence_date: data?.localDate ?? new Date().toISOString().slice(0, 10), absence_type: absenceType, reason: absenceReason.trim() || `Marked ${absenceLabel(absenceType).toLowerCase()} from tablet kiosk`, notes: absenceNotes.trim() || "Tablet attendance flow", signer_type: selectedSigner.type === "guardian" ? "guardian" : "staff", guardian_id: selectedSigner.type === "guardian" ? selectedSigner.id : undefined, assisting_staff_id: selectedSigner.type === "staff" || selectedSigner.type === "admin" ? selectedSigner.id : undefined, signer_name: selectedSigner.name, verification_method: "pin", pin_verification_id: pinVerificationId, signature_name: signatureName.trim() });
       } else {
@@ -269,13 +365,17 @@ export default function Kiosk() {
         if (effectiveSigner.type === "authorized_pickup") payload.pickup_authorization_id = effectiveSigner.id;
         if (effectiveSigner.type === "staff" || effectiveSigner.type === "admin") payload.assisting_staff_id = effectiveSigner.id;
         if (selectedAction === "in") await mobileApi.guardianCheckIn(payload);
-        else await mobileApi.guardianCheckOut({ ...payload, early_checkout: selectedAction === "early" });
+        else await mobileApi.guardianCheckOut(payload);
       }
       setConfirmation({ child: selectedChild.name, action: actionLabels[selectedAction], time: formatAttendanceTime(new Date(), data?.timezone ?? DEFAULT_ATTENDANCE_TIMEZONE), actor: unlockedUser?.name ?? user?.name ?? "Actor", signer: selectedSigner?.name ?? "Signer", verification: "pin + signature", absenceType: selectedAction === "absent" ? absenceLabel(absenceType) : undefined });
       setStep("confirm");
       const response = await mobileApi.tabletBootstrap(mode);
       setData(response);
     } catch (err) {
+      if (isSubscriptionRequiredError(err)) {
+        setStep("subscription");
+        return;
+      }
       Alert.alert("Attendance not saved", getApiError(err).message || "Check the child status, signer authorization, location permission, and verification method, then try again.");
     } finally {
       setSaving(false);
@@ -284,8 +384,13 @@ export default function Kiosk() {
   }
 
   function startOver() {
-    setStep("welcome");
-    setSelectedClassroomId("");
+    // Return to the children list, per spec — not the classroom list and not the unlock
+    // screen. A classroom already selected this session stays selected (re-picking a
+    // classroom after every single child would be a poor kiosk experience for a teacher
+    // working through their whole room); the tablet stays unlocked between actions, only
+    // "Lock tablet" (below) ends the unlocked session.
+    const usesClassrooms = unlocked && data && data.uses_classrooms !== false && data.facility_type !== "family_child_care" && data.facilityType !== "family_child_care";
+    setStep(unlocked && data ? (usesClassrooms && !classroomScopeChosen ? "classroom" : "child") : "welcome");
     setSelectedChildId("");
     setSelectedAction("in");
     setSigners([]);
@@ -303,6 +408,9 @@ export default function Kiosk() {
 
   function lockTablet() {
     startOver();
+    setStep("welcome");
+    setSelectedClassroomId("");
+    setClassroomScopeChosen(false);
     setUnlocked(false);
     setUnlockedUser(null);
     setData(null);
@@ -317,7 +425,10 @@ export default function Kiosk() {
   const credentialPlaceholder = mode === "staff" ? "Staff PIN" : "Admin/manager PIN or password";
   const emailPlaceholder = mode === "staff" ? "Staff email" : "Admin or manager email";
   const unlockButton = mode === "staff" ? "Continue as staff" : "Unlock admin mode";
-  const visibleActions = ["in", "out", "absent", "early"] as Action[];
+  const selectedChildStatus: ChildStatus | null = selectedChild && data
+    ? statusFor(selectedChild, data.attendance, data.absences, data.localDate ?? "")
+    : null;
+  const visibleActions = selectedChildStatus ? actionsForStatus(selectedChildStatus) : [];
 
   return (
     <SafeAreaView edges={["top", "bottom", "left", "right"]} style={styles.safeArea}>
@@ -339,23 +450,25 @@ export default function Kiosk() {
             {!unlocked ? (
               <View style={styles.unlock}>
                 <Text style={[styles.stepTitle, { fontSize: isCompact ? 28 : 34 }]}>Unlock provider tablet</Text>
-                <Text style={styles.detail}>Staff, teachers, owners, or admins open the tablet. Parents and guardians are selected later as signers and verify with their tablet PIN.</Text>
-                <View style={styles.grid}>
-                  <Tile icon="school" active={mode === "staff"} title="Staff" detail="Assigned classroom attendance for teachers and staff." onPress={() => { setMode("staff"); setSelectedAction("in"); setPin(""); }} />
-                  <Tile icon="settings" active={mode === "admin"} title="Admin" detail="Full organization tablet attendance controls." onPress={() => { setMode("admin"); setSelectedAction("in"); setPin(""); }} />
-                </View>
-                <Text style={styles.unlockedText}>{modeLabel}</Text>
+                <Text style={styles.detail}>Admins open the tablet. Teachers, or parents and guardians are selected later as signers and verify with their tablet PIN.</Text>
+
+
+
                 <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder={emailPlaceholder} autoCapitalize="none" keyboardType="email-address" />
                 <TextInput style={styles.input} value={pin} onChangeText={setPin} placeholder={credentialPlaceholder} secureTextEntry />
-                <Button onPress={unlockWithPin}>{saving ? "Unlocking..." : unlockButton}</Button>
+                <Button disabled={saving} onPress={unlockWithPin}>{saving ? "Unlocking..." : unlockButton}</Button>
               </View>
             ) : (
               <View style={styles.unlock}>
                 <Text style={styles.unlockedText}>{modeLabel} unlocked by: {unlockedUser?.name ?? user?.name ?? "User"}</Text>
-                <Button onPress={() => loadTabletData(mode)}>{saving ? "Loading..." : (data?.uses_classrooms === false || data?.facility_type === "family_child_care" ? "Continue to children" : "Continue to classrooms")}</Button>
+                <Button disabled={saving} onPress={() => loadTabletData(mode)}>{saving ? "Loading tablet..." : (data?.uses_classrooms === false || data?.facility_type === "family_child_care" ? "Continue to children" : "Continue to classrooms")}</Button>
               </View>
             )}
           </View>
+        ) : null}
+
+        {step === "subscription" ? (
+          <SubscriptionRequiredScreen onBack={() => { setStep("welcome"); setUnlocked(false); setUnlockedUser(null); setData(null); }} />
         ) : null}
 
         {step === "classroom" && data ? (
@@ -367,7 +480,7 @@ export default function Kiosk() {
               <Tile active={!selectedClassroomId} title="All classrooms" detail={`${data.children.length} visible children`} onPress={() => setSelectedClassroomId("")} />
               {data.classrooms.map((room) => <Tile key={room.id} active={selectedClassroomId === String(room.id)} title={room.name} detail={`${room.children_count ?? data.children.filter((child) => String(child.classroomId) === String(room.id) || child.classroom === room.name).length} children`} onPress={() => setSelectedClassroomId(String(room.id))} />)}
             </View>
-            <Button onPress={() => setStep("child")}>Continue</Button>
+            <Button onPress={() => { setClassroomScopeChosen(true); setStep("child"); }}>Continue</Button>
           </View>
         ) : null}
 
@@ -388,10 +501,32 @@ export default function Kiosk() {
 
         {step === "action" ? (
           <StepPanel title="Choose action">
-            <View style={styles.grid}>
-              {visibleActions.map((action) => <Tile key={action} color={actionTone[action]} active={selectedAction === action} title={actionLabels[action]} detail={action === "early" ? "Pickup before scheduled time." : action === "absent" ? "Record absence type and notes." : "Attendance operation."} onPress={() => setSelectedAction(action)} />)}
-            </View>
-            <Button onPress={() => setStep("signer")}>Continue</Button>
+            <Text style={styles.detail}>{selectedChild?.name} - {selectedChildStatus ?? "status unknown"}</Text>
+            {visibleActions.length === 0 ? (
+              <>
+                <Text style={styles.warning}>
+                  {selectedChildStatus === "absent"
+                    ? "This child was already marked absent today."
+                    : "This child's attendance for today is already resolved. No further tablet action is available."}
+                </Text>
+                <Button variant="outline" onPress={startOver}>Back to children</Button>
+              </>
+            ) : (
+              <>
+                <View style={styles.grid}>
+                  {visibleActions.map((action) => <Tile key={action} color={actionTone[action]} active={selectedAction === action} title={actionLabels[action]} detail={action === "absent" ? "Record absence type and notes." : "Attendance operation."} onPress={() => setSelectedAction(action)} />)}
+                </View>
+                <View style={styles.actions}>
+                  {/* Wrong-child recovery point (see spec): this is the last step before
+                      the controlled verification flow (signer -> PIN -> signature) begins,
+                      so it's the one place a "change child" back action belongs. Reuses
+                      startOver(), the same reset already used by the "already resolved"
+                      branch above, rather than a second navigation path. */}
+                  <Button variant="outline" onPress={startOver}>Back to children</Button>
+                  <Button onPress={() => setStep("signer")}>Continue</Button>
+                </View>
+              </>
+            )}
           </StepPanel>
         ) : null}
 
@@ -414,7 +549,7 @@ export default function Kiosk() {
               <TextInput style={styles.input} value={absenceReason} onChangeText={setAbsenceReason} placeholder="Reason, e.g. parent reported child is sick" />
               <TextInput style={[styles.input, styles.notesInput]} value={absenceNotes} onChangeText={setAbsenceNotes} placeholder="Optional notes" multiline />
             </View> : null}
-            <Button onPress={verifySelectedSignerPin}>{saving ? "Verifying..." : "Verify PIN and continue"}</Button>
+            <Button disabled={saving} onPress={verifySelectedSignerPin}>{saving ? "Verifying..." : "Verify PIN and continue"}</Button>
           </StepPanel>
         ) : null}
 
@@ -428,7 +563,7 @@ export default function Kiosk() {
             </View>
             <View style={styles.actions}>
               <Button variant="outline" onPress={() => setPoints([])}>Clear signature</Button>
-              <Button onPress={submitAttendance}>{saving ? "Saving..." : "Submit"}</Button>
+              <Button disabled={saving} onPress={submitAttendance}>{saving ? "Saving..." : "Submit"}</Button>
             </View>
           </StepPanel>
         ) : null}

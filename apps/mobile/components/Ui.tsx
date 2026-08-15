@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { Pressable, PressableProps, StyleSheet, Text, View } from "react-native";
+import { Pressable, PressableProps, StyleProp, StyleSheet, Text, View, ViewStyle } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "@barbaari/shared";
 
@@ -13,8 +13,8 @@ export function Screen({ children }: { children: ReactNode }) {
   );
 }
 
-export function Card({ children }: { children: ReactNode }) {
-  return <View style={styles.card}>{children}</View>;
+export function Card({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
+  return <View style={[styles.card, style]}>{children}</View>;
 }
 
 export function Button({ children, onPress, variant = "primary", ...pressableProps }: PressableProps & { children: ReactNode; variant?: "primary" | "secondary" | "outline" }) {

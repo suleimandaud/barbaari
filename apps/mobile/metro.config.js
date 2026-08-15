@@ -1,18 +1,26 @@
-const path = require("path");
-const { getDefaultConfig } = require("expo/metro-config");
+const { getDefaultConfig } = require('expo/metro-config');
+const path = require('path');
 
 const projectRoot = __dirname;
-const sharedRoot = path.resolve(projectRoot, "../../packages/shared");
-const nodeModulesRoot = path.resolve(projectRoot, "node_modules");
+const workspaceRoot = path.resolve(projectRoot, '../..');
 
 const config = getDefaultConfig(projectRoot);
 
-config.resolver.extraNodeModules = {
-  ...config.resolver.extraNodeModules,
-  "@barbaari/shared": sharedRoot,
-  expo: path.resolve(nodeModulesRoot, "expo"),
-  react: path.resolve(nodeModulesRoot, "react"),
-  "react-native": path.resolve(nodeModulesRoot, "react-native"),
+config.watchFolders = [workspaceRoot];
+config.resolver.nodeModulesPaths = [
+  path.resolve(projectRoot, 'node_modules'),
+  path.resolve(workspaceRoot, 'node_modules'),
+];
+
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === 'react' || moduleName.startsWith('react/')) {
+    return context.resolveRequest(
+      { ...context, disableHierarchicalLookup: true },
+      moduleName,
+      platform,
+    );
+  }
+  return context.resolveRequest(context, moduleName, platform);
 };
 
 module.exports = config;

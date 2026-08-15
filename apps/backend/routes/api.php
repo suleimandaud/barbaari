@@ -2,13 +2,14 @@
 
 use App\Http\Controllers\ApiController;
 use App\Http\Controllers\AuthController;
-use App\Http\Controllers\TimezoneDiagnosticsController;
+use App\Http\Controllers\HealthController;
 use Illuminate\Support\Facades\Route;
 
-// TEMPORARY — production timezone-detection incident diagnostics. Token-gated (404s unless
-// TIMEZONE_DEBUG_TOKEN is set). Remove this route and app/Http/Controllers/TimezoneDiagnosticsController.php
-// once the incident in TIMEZONE_PRODUCTION_DEBUG_REPORT.md is resolved.
-Route::get('_debug/timezone-lookup', [TimezoneDiagnosticsController::class, 'check'])->middleware('throttle:20,1');
+// Deliberately unauthenticated (a load balancer's health probe or an external uptime
+// monitor has no session/token) but throttled to prevent it being used as a cheap way to
+// repeatedly exercise DB/cache/filesystem writes. See HealthController for what "healthy"
+// means and why some checks are critical (503s the response) and some are advisory only.
+Route::get('health', [HealthController::class, 'check'])->middleware('throttle:30,1');
 
 Route::get('public/pricing-plans', [ApiController::class, 'publicPricingPlans'])->middleware('throttle:60,1');
 Route::post('public/validate-address', [ApiController::class, 'validatePublicAddress'])->middleware('throttle:6,1');
@@ -150,12 +151,10 @@ Route::middleware(['auth:sanctum', 'throttle:api', 'subscription.active'])->grou
     Route::get('notifications', [ApiController::class, 'notifications']);
     Route::get('notifications/unread-count', [ApiController::class, 'unreadNotificationCount']);
     Route::patch('notifications/read-all', [ApiController::class, 'markAllNotificationsRead']);
-    Route::post('notifications/test', [ApiController::class, 'createTestNotification']);
     Route::post('notifications', [ApiController::class, 'createNotification'])->middleware('role:daycare_admin,manager');
     Route::patch('notifications/{notification}/read', [ApiController::class, 'markNotificationRead']);
     Route::post('notifications/{notification}/read', [ApiController::class, 'markNotificationRead']);
     Route::delete('notifications/{notification}', [ApiController::class, 'deleteNotification']);
-    Route::post('announcements', [ApiController::class, 'announcement'])->middleware('role:daycare_admin,manager');
 
     Route::post('documents', [ApiController::class, 'uploadDocument'])->middleware('role:daycare_admin,manager,staff,teacher');
     Route::get('documents', [ApiController::class, 'documents']);

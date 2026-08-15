@@ -4,7 +4,8 @@
     "strict": true,
     "types": ["react"],
     "paths": {
-      "@barbaari/shared": ["../../packages/shared/src"]
+      "@barbaari/shared": ["../../packages/shared/src"],
+      "react": ["./node_modules/@types/react"]
     }
   },
   "include": ["app", "components", "../../packages/shared/src"]

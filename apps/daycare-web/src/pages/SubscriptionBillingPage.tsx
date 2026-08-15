@@ -31,15 +31,17 @@ export function SubscriptionBillingPage() {
   const [message, setMessage] = useState("");
   const [actionError, setActionError] = useState("");
   const [cancelConfirm, setCancelConfirm] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   async function cancelSubscription() {
-    setMessage(""); setActionError("");
+    if (cancelling) return;
+    setMessage(""); setActionError(""); setCancelling(true);
     try {
       const res = await daycarePlatformBillingApi.cancelStripeSubscription();
       setMessage(res.message);
       reload();
     } catch (err) { setActionError(getApiError(err).message); }
-    finally { setCancelConfirm(false); }
+    finally { setCancelling(false); setCancelConfirm(false); }
   }
 
   function downloadPdf(invoiceId: string) {
@@ -120,8 +122,8 @@ export function SubscriptionBillingPage() {
           <div className="settings-stack">
             <p className="muted">Are you sure? Your access will continue until the end of the current billing period.</p>
             <div className="actions">
-              <button className="secondary" onClick={cancelSubscription}>Yes, cancel at period end</button>
-              <button className="secondary" onClick={() => setCancelConfirm(false)}>Keep subscription</button>
+              <button className="secondary" disabled={cancelling} onClick={cancelSubscription}>{cancelling ? "Cancelling..." : "Yes, cancel at period end"}</button>
+              <button className="secondary" disabled={cancelling} onClick={() => setCancelConfirm(false)}>Keep subscription</button>
             </div>
           </div>
         )}

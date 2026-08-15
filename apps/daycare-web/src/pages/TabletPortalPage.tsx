@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { authApi, getApiError, tabletApi } from "@barbaari/shared";
 import { ErrorAlert, SuccessAlert } from "../components/Alerts";
 import { Badge } from "../components/Status";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
 
 type Mode = "guardian" | "staff" | "admin";
 type Action = "check_in" | "check_out" | "absence";
@@ -16,6 +17,16 @@ const absenceTypes = [
   ["other", "Other"]
 ] as const;
 
+function geolocationErrorMessage(error: GeolocationPositionError): string {
+  // A GPS timeout or hardware-unavailable reading is common (weak signal indoors) and
+  // should not be reported the same as an actual permission denial — that sends staff
+  // hunting through permission settings that are already fine.
+  if (error.code === error.PERMISSION_DENIED) return "Location access is blocked for this browser. Please allow location access and try again.";
+  if (error.code === error.POSITION_UNAVAILABLE) return "This device could not determine its location. Please try again or move to an area with a clearer signal.";
+  if (error.code === error.TIMEOUT) return "Getting your location took too long. Please try again.";
+  return "We could not determine your location. Please try again.";
+}
+
 function browserLocation(): Promise<{ latitude: number; longitude: number }> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -24,7 +35,7 @@ function browserLocation(): Promise<{ latitude: number; longitude: number }> {
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
-      () => reject(new Error("Location permission is required for attendance.")),
+      (error) => reject(new Error(geolocationErrorMessage(error))),
       { timeout: 8000, maximumAge: 30000, enableHighAccuracy: true }
     );
   });
@@ -45,6 +56,7 @@ function modeLabel(mode?: Mode) {
 }
 
 export function TabletPortalPage() {
+  const isOnline = useOnlineStatus();
   const [mode, setMode] = useState<Mode | undefined>();
   const [email, setEmail] = useState("");
   const [credential, setCredential] = useState("");
@@ -185,6 +197,11 @@ export function TabletPortalPage() {
     setSaving(true);
     setError("");
     setMessage("");
+    if (!isOnline) {
+      setError("You're offline. Please reconnect before saving attendance.");
+      setSaving(false);
+      return;
+    }
     try {
       const signerPayload = attendanceSignerPayload();
       const location = await browserLocation();
@@ -258,6 +275,7 @@ export function TabletPortalPage() {
           {session ? <button className="secondary" onClick={() => reset(true)}>Lock tablet</button> : null}
         </header>
 
+        {!isOnline ? <div className="alert-banner warning">You're offline. Attendance actions require a connection — reconnect before checking children in or out.</div> : null}
         <SuccessAlert message={message} />
         <ErrorAlert message={error} />
 

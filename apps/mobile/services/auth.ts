@@ -1,5 +1,5 @@
 import * as SecureStore from "expo-secure-store";
-import { authApi, setBearerToken } from "@barbaari/shared";
+import { authApi, getApiError, setBearerToken } from "@barbaari/shared";
 
 const TOKEN_KEY = "barbaari_token";
 const USER_KEY = "barbaari_user";
@@ -86,9 +86,17 @@ export async function restoreSession() {
     const me = (await authApi.me()).user;
     await storeUser(me);
     return me as MobileUser;
-  } catch {
-    await logoutMobile();
-    return null;
+  } catch (err) {
+    const apiError = getApiError(err);
+    // Only a genuine auth failure (expired/invalid token) should log the user out on
+    // app open. A network blip or server error while merely checking the session must
+    // not wipe a perfectly valid token — fall back to the last-known user so the app can
+    // still open in a degraded/offline state instead of forcing a fresh login.
+    if (apiError.status === 401 || apiError.status === 403) {
+      await logoutMobile();
+      return null;
+    }
+    return getStoredUser();
   }
 }
 

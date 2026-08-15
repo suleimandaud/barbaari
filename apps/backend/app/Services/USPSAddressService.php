@@ -24,6 +24,7 @@ class USPSAddressService
             $response = Http::withToken($token)
                 ->acceptJson()
                 ->timeout(12)
+                ->retry(1, 400, throw: false)
                 ->get($baseUrl.'/addresses/v3/address', [
                     'streetAddress' => $address['address_line1'],
                     'secondaryAddress' => $address['address_line2'] ?? null,
@@ -75,6 +76,7 @@ class USPSAddressService
             $response = Http::asForm()
                 ->acceptJson()
                 ->timeout(12)
+                ->retry(1, 400, throw: false)
                 ->post($baseUrl.'/oauth2/v3/token', [
                     'grant_type' => 'client_credentials',
                     'client_id' => $consumerKey,

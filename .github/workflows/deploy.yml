@@ -1,0 +1,114 @@
+name: Deploy (Blue-Green)
+
+# TEMPLATE — not wired to any real infrastructure. This file cannot run successfully as-is:
+# it has no `secrets.*` configured in any GitHub environment, and `workflow_dispatch` means
+# it never fires on its own (no push/schedule trigger). It exists so the deployment sequence
+# described in BLUE_GREEN_DEPLOYMENT_GUIDE.md is expressed as a concrete, reviewable workflow
+# rather than only prose — filling in the placeholders below (marked FILL IN) against real
+# servers/secrets is the remaining external step. See that guide for the full explanation of
+# why each step exists and what "idle" vs "live" means for this app specifically.
+on:
+  workflow_dispatch:
+    inputs:
+      target_slot:
+        description: "Which idle slot to deploy to (the one NOT currently receiving traffic)"
+        required: true
+        type: choice
+        options: [blue, green]
+
+jobs:
+  # Reuses the exact same test/build steps as ci.yml on purpose — a deploy must never ship
+  # code that hasn't passed the same gate a normal PR would have to pass.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  deploy-idle-slot:
+    name: Deploy to idle slot (${{ inputs.target_slot }})
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production # FILL IN: create this GitHub Environment, attach required secrets below
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build frontend bundles
+        run: |
+          npm ci
+          npm --workspace @barbaari/daycare-web run build
+          npm --workspace @barbaari/super-admin run build
+
+      # FILL IN: replace with your actual release mechanism (rsync, `git pull` + `composer
+      # install --no-dev` over SSH, an artifact upload to the target host, etc.) — deliberately
+      # not prescribed here since it depends on hosting, which this repo has no evidence of.
+      - name: Ship release to the idle slot's release directory
+        run: |
+          echo "FILL IN - deploy apps/backend + dist/ to the ${{ inputs.target_slot }} host/release-dir"
+
+      # Additive/backward-compatible migrations only — see BLUE_GREEN_DEPLOYMENT_GUIDE.md
+      # section 4 (Database Strategy) for why this matters.
+      - name: Run database migrations
+        run: |
+          echo "FILL IN - ssh <idle-host> 'cd <release-dir> && php artisan migrate --force'"
+
+      - name: Warm config/route/view cache on the idle slot
+        run: |
+          echo "FILL IN - ssh <idle-host> 'php artisan config:cache && php artisan route:cache && php artisan view:cache'"
+
+      # Do NOT point these at the production queue yet if you want strict per-slot
+      # isolation — see BLUE_GREEN_DEPLOYMENT_GUIDE.md section 5 (Queue Strategy).
+      - name: Start/reload queue workers on the idle slot
+        run: |
+          echo "FILL IN - ssh <idle-host> 'sudo systemctl restart barbaari-queue-${{ inputs.target_slot }}'"
+
+  health-check-idle-slot:
+    name: Verify idle slot is healthy before any traffic moves
+    needs: deploy-idle-slot
+    runs-on: ubuntu-latest
+    steps:
+      # This hits the real /api/health endpoint added this round (HealthController) — the
+      # 503-on-critical-failure behavior is what this step actually depends on.
+      - name: Poll idle slot's health endpoint
+        run: |
+          echo "FILL IN: replace with the idle slot's real internal URL"
+          for i in $(seq 1 10); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "https://FILL-IN-${{ inputs.target_slot }}.internal/api/health" || echo "000")
+            if [ "$status" = "200" ]; then echo "healthy"; exit 0; fi
+            sleep 5
+          done
+          echo "idle slot never reported healthy — aborting before any cutover" >&2
+          exit 1
+
+  cutover:
+    name: Shift traffic to the newly-verified slot
+    needs: health-check-idle-slot
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      # FILL IN: however traffic is actually routed — reload an nginx upstream config,
+      # flip a load balancer target group, update a DNS/weighted-routing record, etc.
+      # Must be a single atomic switch, not a gradual config change, so rollback (below) is
+      # also a single atomic switch back.
+      - name: Point the load balancer at the newly-deployed slot
+        run: |
+          echo "FILL IN - cut traffic over to ${{ inputs.target_slot }}"
+
+      - name: Post-cutover smoke check against the now-live public URL
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" "https://FILL-IN-production-public-url/api/health" || echo "000")
+          if [ "$status" != "200" ]; then
+            echo "Post-cutover health check failed — see rollback job" >&2
+            exit 1
+          fi
+
+  rollback-on-failure:
+    name: Automatic rollback
+    needs: cutover
+    if: failure()
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      # The previous slot was never stopped (it's still the "blue" side, still fully warmed
+      # and serving its last-known-good code) — rollback is just re-pointing traffic back,
+      # not a redeploy. This is the entire reason blue-green rollback is fast.
+      - name: Point the load balancer back at the previously-live slot
+        run: |
+          echo "FILL IN - cut traffic back to the slot that was live before this run started"

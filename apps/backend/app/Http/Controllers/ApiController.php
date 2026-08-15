@@ -314,7 +314,7 @@ class ApiController extends Controller
 
     public function children(Request $request)
     {
-        return response()->json(['children' => $this->visibleChildren($request)->with('classroom', 'guardians')->get()->map(fn ($child) => $this->childPayload($child))]);
+        return response()->json(['children' => $this->visibleChildren($request)->with('classroom', 'guardians', 'organization', 'latestAttendanceRecord')->get()->map(fn ($child) => $this->childPayload($child))]);
     }
 
     public function tabletBootstrap(Request $request)
@@ -324,7 +324,7 @@ class ApiController extends Controller
         $organization = $request->user()->organization;
         $facilityType = $organization?->facility_type ?? 'center_daycare';
         $childrenQuery = $this->tabletChildren($request, $mode);
-        $children = $childrenQuery->with('classroom', 'guardians')->get();
+        $children = $childrenQuery->with('classroom', 'guardians', 'organization', 'latestAttendanceRecord')->get();
         $childIds = $children->pluck('id');
         $classroomIds = $children->pluck('classroom_id')->filter()->unique()->values();
         $classrooms = Classroom::where('organization_id', $this->orgId($request))
@@ -784,8 +784,9 @@ class ApiController extends Controller
         $localDate = Carbon::now($timezone)->toDateString();
         $locationData = $this->calculateLocationData($child->organization_id, $data['latitude'] ?? null, $data['longitude'] ?? null, 'check_in', $child, $request->user());
 
-        $record = AttendanceRecord::firstOrCreate(
-            ['child_id' => $child->id, 'date' => $localDate],
+        [$record, $wasRecentlyCreated] = $this->findOrCreateAttendanceRecordForDate(
+            $child->id,
+            $localDate,
             array_merge([
                 'organization_id' => $child->organization_id,
                 'classroom_id' => $child->classroom_id,
@@ -798,13 +799,20 @@ class ApiController extends Controller
             ], $locationData)
         );
 
-        if (! $record->wasRecentlyCreated && ! $record->check_in_time) {
+        $isNewCheckIn = $wasRecentlyCreated;
+        if (! $wasRecentlyCreated && ! $record->check_in_time) {
             $record->update(array_merge(['check_in_time' => $today, 'check_in_signed_by_user_id' => $request->user()->id], $locationData));
+            $isNewCheckIn = true;
         }
 
-        $this->attendanceAudit($record, 'check_in', null, $record->toArray(), 'Initial check-in', $request->user()->id);
-        $this->notifications->notifyParentChildCheckedIn($child->loadMissing('guardians'), $record->fresh(), $request->user());
-        return response()->json(['attendance' => $this->attendancePayload($record->fresh(['child.classroom', 'classroom']))], 201);
+        // A retry/double-tap of an already-completed check-in must not spam the parent
+        // with a duplicate "checked in" notification or write a misleading duplicate
+        // "Initial check-in" audit entry.
+        if ($isNewCheckIn) {
+            $this->attendanceAudit($record, 'check_in', null, $record->fresh()->toArray(), 'Initial check-in', $request->user()->id);
+            $this->notifications->notifyParentChildCheckedIn($child->loadMissing('guardians'), $record->fresh(), $request->user());
+        }
+        return response()->json(['attendance' => $this->attendancePayload($record->fresh(['child.classroom', 'classroom']))], $isNewCheckIn ? 201 : 200);
     }
 
     public function checkOut(Request $request)
@@ -825,6 +833,17 @@ class ApiController extends Controller
         $this->consumePinVerificationIfNeeded($request, $data);
         $localDate = Carbon::now($this->attendanceTimezone($child->organization_id))->toDateString();
         $record = AttendanceRecord::where('child_id', $child->id)->whereDate('date', $localDate)->firstOrFail();
+        // A double-tap, a client retry after a perceived timeout, or two devices checking
+        // the same child out moments apart must never silently overwrite who actually
+        // checked this child out and when — that's a custody record. If it's already
+        // checked out, this is a no-op repeat, not a new checkout; the existing record
+        // stands, and staff can use the dedicated correction endpoint if it's genuinely wrong.
+        if ($record->check_out_time) {
+            return response()->json([
+                'attendance' => $this->attendancePayload($record->fresh(['child.classroom', 'classroom'])),
+                'message' => 'This child is already checked out.',
+            ], 409);
+        }
         $original = $record->toArray();
         $locationData = $this->calculateLocationData($child->organization_id, $data['latitude'] ?? null, $data['longitude'] ?? null, 'check_out', $child, $request->user());
         $record->update(array_merge([
@@ -1094,8 +1113,9 @@ class ApiController extends Controller
 
         if ($direction === 'check_in') {
             $localDate = Carbon::now($this->attendanceTimezone($child->organization_id))->toDateString();
-            $record = AttendanceRecord::firstOrCreate(
-                ['child_id' => $child->id, 'date' => $localDate],
+            [$record, $wasRecentlyCreated] = $this->findOrCreateAttendanceRecordForDate(
+                $child->id,
+                $localDate,
                 array_merge([
                     'organization_id' => $child->organization_id,
                     'classroom_id' => $child->classroom_id,
@@ -1112,27 +1132,40 @@ class ApiController extends Controller
                     'signature_hash' => $signatureHash,
                 ], $locationData)
             );
-            $original = $record->wasRecentlyCreated ? null : $record->toArray();
-            $record->update(array_merge([
-                'check_in_time' => $record->check_in_time ?? now(),
-                'check_in_signed_by_user_id' => $request->user()->id,
-                'guardian_id' => $guardianId,
-                'pickup_authorization_id' => $pickupAuthorizationId,
-                'assisting_staff_id' => $data['assisting_staff_id'] ?? $record->assisting_staff_id,
-                'signer_name' => $signerName,
-                'signer_type' => $signerType,
-                'verification_method' => $data['verification_method'],
-                'device_id' => $data['device_id'] ?? $record->device_id,
-                'signature_reference' => $signatureReference,
-                'signature_hash' => $signatureHash,
-            ], $locationData));
-            $this->attendanceAudit($record->fresh(), 'guardian_check_in', $original, $record->fresh()->toArray(), 'Guardian/authorized pickup signed check-in', $request->user()->id);
-            $this->notifications->notifyParentChildCheckedIn($child->loadMissing('guardians'), $record->fresh(), $request->user());
-            return response()->json(['attendance' => $this->attendancePayload($record->fresh(['child.classroom', 'classroom', 'guardian']))], $record->wasRecentlyCreated ? 201 : 200);
+            // A retry/double-tap of an already-completed signed check-in must not silently
+            // overwrite who actually signed it in (possibly with a *different* signer's
+            // details) or re-fire the parent notification. Only write and audit/notify on
+            // the genuine first check-in for this child+date.
+            if ($wasRecentlyCreated) {
+                $record->update(array_merge([
+                    'check_in_time' => $record->check_in_time ?? now(),
+                    'check_in_signed_by_user_id' => $request->user()->id,
+                    'guardian_id' => $guardianId,
+                    'pickup_authorization_id' => $pickupAuthorizationId,
+                    'assisting_staff_id' => $data['assisting_staff_id'] ?? $record->assisting_staff_id,
+                    'signer_name' => $signerName,
+                    'signer_type' => $signerType,
+                    'verification_method' => $data['verification_method'],
+                    'device_id' => $data['device_id'] ?? $record->device_id,
+                    'signature_reference' => $signatureReference,
+                    'signature_hash' => $signatureHash,
+                ], $locationData));
+                $this->attendanceAudit($record->fresh(), 'guardian_check_in', null, $record->fresh()->toArray(), 'Guardian/authorized pickup signed check-in', $request->user()->id);
+                $this->notifications->notifyParentChildCheckedIn($child->loadMissing('guardians'), $record->fresh(), $request->user());
+            }
+            return response()->json(['attendance' => $this->attendancePayload($record->fresh(['child.classroom', 'classroom', 'guardian']))], $wasRecentlyCreated ? 201 : 200);
         }
 
         $localDate = Carbon::now($this->attendanceTimezone($child->organization_id))->toDateString();
         $record = AttendanceRecord::where('child_id', $child->id)->whereDate('date', $localDate)->firstOrFail();
+        // Same reasoning as the staff-facing checkOut(): never let a retry/double-tap
+        // silently overwrite an existing custody-transfer record.
+        if ($record->check_out_time) {
+            return response()->json([
+                'attendance' => $this->attendancePayload($record->fresh(['child.classroom', 'classroom', 'guardian'])),
+                'message' => 'This child is already checked out.',
+            ], 409);
+        }
         $original = $record->toArray();
         $record->update(array_merge([
             'check_out_time' => now(),
@@ -1181,14 +1214,20 @@ class ApiController extends Controller
             ->latest('edited_at')
             ->get()
             ->map(fn ($log) => $this->attendanceAuditPayload($log));
-        $absenceLogs = AuditLog::with('actor')
+        $absenceLogsRaw = AuditLog::with('actor')
             ->where('organization_id', $this->orgId($request))
             ->where('target_type', AbsenceRecord::class)
             ->latest()
-            ->get()
-            ->map(function (AuditLog $log) {
+            ->get();
+        // Batch-load every referenced child in one query instead of one Child::find() per
+        // audit log row — an organization with a long absence-edit history was issuing one
+        // query per row here.
+        $absenceChildIds = $absenceLogsRaw->map(fn (AuditLog $log) => ($log->changes ?? [])['child_id'] ?? null)->filter()->unique()->values();
+        $absenceChildren = Child::with('classroom', 'organization')->whereIn('id', $absenceChildIds)->get()->keyBy('id');
+        $absenceLogs = $absenceLogsRaw
+            ->map(function (AuditLog $log) use ($absenceChildren) {
                 $changes = $log->changes ?? [];
-                $child = isset($changes['child_id']) ? Child::with('classroom', 'organization')->find($changes['child_id']) : null;
+                $child = isset($changes['child_id']) ? $absenceChildren->get($changes['child_id']) : null;
                 $timezone = $log->organization_id ? $this->attendanceTimezone($log->organization_id) : 'Africa/Nairobi';
                 $editedAtLocal = $log->created_at ? $log->created_at->copy()->timezone($timezone) : null;
 
@@ -1486,6 +1525,13 @@ class ApiController extends Controller
 
     public function staffCheckIn(Request $request)
     {
+        // A double-tap/retry must not open a second concurrent shift — staffCheckOut()
+        // only ever closes the single most recent open row, so any earlier duplicates
+        // would be left permanently "open," corrupting staff time-tracking data.
+        $open = DB::table('staff_check_ins')->where('user_id', $request->user()->id)->whereNull('check_out_time')->latest('id')->first();
+        if ($open) {
+            return response()->json(['staff_check_in_id' => $open->id, 'message' => 'Already checked in.'], 200);
+        }
         $row = DB::table('staff_check_ins')->insertGetId(['user_id' => $request->user()->id, 'organization_id' => $this->orgId($request), 'check_in_time' => now(), 'created_at' => now(), 'updated_at' => now()]);
         return response()->json(['staff_check_in_id' => $row], 201);
     }
@@ -1499,7 +1545,7 @@ class ApiController extends Controller
     public function staffClassroomChildren(Request $request)
     {
         $classroomId = $request->user()->staffProfile?->classroom_id;
-        return response()->json(['children' => Child::with('classroom', 'guardians')->where('classroom_id', $classroomId)->get()->map(fn ($child) => $this->childPayload($child))]);
+        return response()->json(['children' => Child::with('classroom', 'guardians', 'organization', 'latestAttendanceRecord')->where('classroom_id', $classroomId)->get()->map(fn ($child) => $this->childPayload($child))]);
     }
 
     public function staffActivity(Request $request)
@@ -1545,10 +1591,16 @@ class ApiController extends Controller
     {
         abort_unless($invoice->organization_id === $this->orgId($request), 403);
         $data = $request->validate(['amount' => ['required', 'numeric'], 'method' => ['required', 'string']]);
-        $paymentId = DB::table('payments')->insertGetId(['invoice_id' => $invoice->id, 'amount' => $data['amount'], 'method' => $data['method'], 'status' => 'paid', 'paid_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
-        $invoice->update(['status' => 'paid']);
-        DB::table('receipts')->insert(['payment_id' => $paymentId, 'receipt_number' => 'RCT-'.$paymentId, 'created_at' => now(), 'updated_at' => now()]);
-        $fresh = $invoice->fresh(['child.guardians', 'guardian', 'payments']);
+        // A double-click, a retried request, or a second tab acting on the same invoice
+        // must never record a second payment/receipt for it.
+        abort_if($invoice->status === 'paid', 409, 'This invoice is already paid.');
+        $fresh = DB::transaction(function () use ($invoice, $data) {
+            $paymentId = DB::table('payments')->insertGetId(['invoice_id' => $invoice->id, 'amount' => $data['amount'], 'method' => $data['method'], 'status' => 'paid', 'paid_at' => now(), 'created_at' => now(), 'updated_at' => now()]);
+            $invoice->update(['status' => 'paid']);
+            DB::table('receipts')->insert(['payment_id' => $paymentId, 'receipt_number' => 'RCT-'.$paymentId, 'created_at' => now(), 'updated_at' => now()]);
+
+            return $invoice->fresh(['child.guardians', 'guardian', 'payments']);
+        });
         $this->notifications->notifyParentPaymentRecorded($fresh, $request->user());
 
         return response()->json(['invoice' => $this->invoicePayload($fresh)]);
@@ -1667,6 +1719,12 @@ class ApiController extends Controller
                 'message' => 'Stripe Checkout session created. Redirecting to payment page.',
             ]);
         } catch (\Stripe\Exception\ApiErrorException $e) {
+            \Illuminate\Support\Facades\Log::error('create-checkout-session: Stripe API error', [
+                'organization_id' => $this->orgId($request),
+                'subscription_id' => $subscription->id,
+                'invoice_id' => $invoice->id,
+                'error' => $e->getMessage(),
+            ]);
             return response()->json(['message' => 'Stripe error: '.$e->getMessage()], 422);
         }
     }
@@ -1972,24 +2030,6 @@ class ApiController extends Controller
         return response()->json(['message' => 'Notification deleted.']);
     }
 
-    public function createTestNotification(Request $request)
-    {
-        $notification = $this->notifications->createForUser($request->user(), [
-            'title' => 'Demo notification',
-            'body' => 'This is an internal in-app demo notification. SMS, email, and push providers are not connected yet.',
-            'type' => 'announcement',
-            'priority' => 'normal',
-            'created_by' => $request->user()->id,
-        ]);
-
-        return response()->json(['notification' => $this->notificationPayload($notification)], 201);
-    }
-
-    public function announcement()
-    {
-        return response()->json(['message' => 'Announcement placeholder sent.']);
-    }
-
     public function documents(Request $request)
     {
         $query = Document::with('child.classroom', 'child.guardians')->where('organization_id', $this->orgId($request));
@@ -2144,6 +2184,13 @@ class ApiController extends Controller
         ]);
 
         $created = DB::transaction(function () use ($request, $application, $data) {
+            // Re-check under a row lock, inside the transaction: the plain check above (before
+            // the transaction/lock) is only a fast-path for the common case. Without this,
+            // two near-simultaneous "Approve" clicks (e.g. a double-click, or an admin retrying
+            // after a slow response) could both pass that check before either commits, and each
+            // would create a full duplicate Organization + Subscription for the same application.
+            $application = FacilityRegistrationApplication::lockForUpdate()->findOrFail($application->id);
+            abort_if($application->status === 'approved' && $application->organization_id, 422, 'This application has already been approved.');
             $planId = $data['pricing_plan_id'] ?? $application->pricing_plan_id ?? PricingPlan::where('status', 'active')->orderBy('monthly_price')->value('id');
             if ($application->facility_type === 'family_child_care' && empty($data['pricing_plan_id']) && empty($application->pricing_plan_id)) {
                 $planId = PricingPlan::where('status', 'active')
@@ -2289,7 +2336,7 @@ class ApiController extends Controller
             $this->updateOrganizationTimezone($organization, $timezone);
 
             $periodStart = now();
-            $periodEnd = $data['billing_cycle'] === 'yearly' ? now()->addYear() : now()->addMonth();
+            $periodEnd = Subscription::periodEnd($data['billing_cycle'], $periodStart);
             $subscription = Subscription::create([
                 'organization_id' => $organization->id,
                 'pricing_plan_id' => $plan->id,
@@ -2421,7 +2468,7 @@ class ApiController extends Controller
         if ($existing) {
             $existing->update(['expires_at' => now()->addDays(14)]);
             $existing->load('organization');
-            Mail::to($existing->email)->queue(new OrganizationInvitationMail($existing));
+            $this->queueMailSafely(fn () => Mail::to($existing->email)->queue(new OrganizationInvitationMail($existing)), 'organization invitation refresh');
             return response()->json(['invitation' => $this->invitationPayload($existing), 'message' => 'Existing invitation refreshed and resent.'], 200);
         }
 
@@ -2435,7 +2482,7 @@ class ApiController extends Controller
         abort_unless($invitation->status === 'pending', 422, 'Only pending invitations can be resent.');
         $invitation->update(['token' => Str::random(64), 'expires_at' => now()->addDays(14)]);
         $invitation->load('organization');
-        Mail::to($invitation->email)->queue(new OrganizationInvitationMail($invitation));
+        $this->queueMailSafely(fn () => Mail::to($invitation->email)->queue(new OrganizationInvitationMail($invitation)), 'organization invitation resend');
         $this->platformAudit($request, 'invitation.resent', $organization, ['email' => $invitation->email]);
         return response()->json(['invitation' => $this->invitationPayload($invitation->fresh()), 'message' => 'Invitation resent successfully.']);
     }
@@ -2521,7 +2568,7 @@ class ApiController extends Controller
             'notes' => ['nullable', 'string'],
         ]);
         $periodStart = now();
-        $periodEnd = $data['billing_cycle'] === 'yearly' ? now()->addYear() : now()->addMonth();
+        $periodEnd = Subscription::periodEnd($data['billing_cycle'], $periodStart);
 
         $subscription = Subscription::updateOrCreate(
             ['organization_id' => $data['organization_id']],
@@ -2650,7 +2697,7 @@ class ApiController extends Controller
             'subscription_id' => $subscription?->id,
             'invoice_number' => 'PLAT-'.now()->format('YmdHis').'-'.Str::upper(Str::random(4)),
             'billing_period_start' => $data['billing_period_start'] ?? optional($subscription?->current_period_start)->toDateString() ?? now()->toDateString(),
-            'billing_period_end' => $data['billing_period_end'] ?? optional($subscription?->current_period_end)->toDateString() ?? ($subscription?->billing_cycle === 'yearly' ? now()->addYear()->toDateString() : now()->addMonth()->toDateString()),
+            'billing_period_end' => $data['billing_period_end'] ?? optional($subscription?->current_period_end)->toDateString() ?? Subscription::periodEnd($subscription?->billing_cycle, now())->toDateString(),
             'due_date' => $data['due_date'] ?? now()->addDays(14)->toDateString(),
             'currency' => $plan?->currency ?? 'USD',
             'subtotal' => $subtotal,
@@ -2668,7 +2715,7 @@ class ApiController extends Controller
             $freshInvoice = $invoice->fresh(['organization', 'subscription.pricingPlan', 'payments']);
             $admins = User::where('organization_id', $organizationId)->whereIn('role', ['daycare_admin', 'manager'])->where('status', 'active')->get();
             foreach ($admins as $admin) {
-                Mail::to($admin->email)->queue(new PlatformInvoiceMail($freshInvoice));
+                $this->queueMailSafely(fn () => Mail::to($admin->email)->queue(new PlatformInvoiceMail($freshInvoice)), 'platform invoice notification');
             }
         }
 
@@ -2766,6 +2813,14 @@ class ApiController extends Controller
         try {
             $event = $this->stripe->constructWebhookEvent($payload, $signature);
         } catch (\Stripe\Exception\SignatureVerificationException $e) {
+            // Worth a durable log line, not just the PaymentProviderEvent row — an invalid
+            // signature can mean a misconfigured STRIPE_WEBHOOK_SECRET (an ops problem) or
+            // someone probing the endpoint (a security-relevant event); either way an
+            // operator should be able to find this without querying the DB directly.
+            \Illuminate\Support\Facades\Log::warning('Stripe webhook signature verification failed.', [
+                'provider_event_id' => $providerEvent->id,
+                'error' => $e->getMessage(),
+            ]);
             $providerEvent->update(['status' => 'failed', 'error_message' => 'Signature verification failed: '.$e->getMessage()]);
             return response()->json(['message' => 'Invalid signature.'], 400);
         } catch (\RuntimeException $e) {
@@ -2789,6 +2844,17 @@ class ApiController extends Controller
             $this->handleStripeEvent($event, $providerEvent);
             $providerEvent->update(['status' => 'processed', 'processed_at' => now()]);
         } catch (\Throwable $e) {
+            // This is the path that actually confirms a customer's payment, so an
+            // unexpected failure here needs more than the message string persisted on
+            // the PaymentProviderEvent row — capture the exception class too so it's
+            // possible to tell "a bug in our handler" apart from "Stripe changed its
+            // payload shape" without reproducing the failure.
+            \Illuminate\Support\Facades\Log::error('Stripe webhook processing failed.', [
+                'provider_event_id' => $providerEvent->id,
+                'event_type' => $event->type ?? null,
+                'exception' => $e::class,
+                'error' => $e->getMessage(),
+            ]);
             $providerEvent->update(['status' => 'failed', 'error_message' => $e->getMessage()]);
             return response()->json(['message' => 'Webhook processing error.'], 500);
         }
@@ -3314,6 +3380,57 @@ class ApiController extends Controller
         }
     }
 
+    /**
+     * Find-or-create a check-in AttendanceRecord for a child+date, safe against both:
+     *
+     * 1. A same-request-shape retry/double-tap finding a row that a naive
+     *    `AttendanceRecord::firstOrCreate(['date' => $localDate], ...)` would miss —
+     *    `date` is a cast attribute, and the plain string in firstOrCreate's raw where()
+     *    array is never passed through that cast, so it can fail to match a row that
+     *    Eloquent itself wrote with the cast applied (verified: on SQLite specifically,
+     *    firstOrCreate's own INSERT serializes the cast date with a time component while
+     *    its SELECT does not, so it never finds its own prior row and throws instead of
+     *    returning it). whereDate() correctly matches regardless of any such formatting
+     *    difference.
+     * 2. A genuine race between two near-simultaneous requests (double-tap, or two
+     *    devices) — the unique index on (child_id, date) is the real safety net; if both
+     *    requests' lookups miss and both attempt to create, the loser's insert fails and
+     *    is caught here, re-fetching the winner's row instead of surfacing a raw 500.
+     *
+     * @return array{0: AttendanceRecord, 1: bool} [$record, $wasRecentlyCreated]
+     */
+    private function findOrCreateAttendanceRecordForDate(int $childId, string $date, array $createAttributes): array
+    {
+        $record = AttendanceRecord::where('child_id', $childId)->whereDate('date', $date)->first();
+        if ($record) {
+            return [$record, false];
+        }
+
+        try {
+            $record = AttendanceRecord::create(array_merge(['child_id' => $childId, 'date' => $date], $createAttributes));
+
+            return [$record, true];
+        } catch (\Illuminate\Database\UniqueConstraintViolationException) {
+            return [AttendanceRecord::where('child_id', $childId)->whereDate('date', $date)->firstOrFail(), false];
+        }
+    }
+
+    /**
+     * An email failing to send (SMTP down, mail server slow, DNS blip) must never turn an
+     * otherwise-successful business action (invite created, invoice generated, subscription
+     * activated) into a failed request for the user. Log it for ops and move on.
+     */
+    private function queueMailSafely(\Closure $dispatch, string $context): void
+    {
+        try {
+            $dispatch();
+        } catch (\Throwable $exception) {
+            \Illuminate\Support\Facades\Log::error("Failed to queue email: {$context}", [
+                'error' => $exception->getMessage(),
+            ]);
+        }
+    }
+
     private function authorizeTabletChild(Request $request, Child $child): void
     {
         $mode = $request->string('mode')->toString();
@@ -3477,7 +3594,12 @@ class ApiController extends Controller
 
     private function childPayload(Child $child): array
     {
-        $latest = $child->attendanceRecords()->latest('date')->latest('check_in_time')->first();
+        // relationLoaded() lets call sites that already eager-loaded latestAttendanceRecord
+        // (list endpoints, to avoid one query per child) skip straight to the cached value,
+        // while single-child call sites just lazy-load it as before — same result either way.
+        $latest = $child->relationLoaded('latestAttendanceRecord')
+            ? $child->latestAttendanceRecord
+            : $child->attendanceRecords()->latest('date')->latest('check_in_time')->first();
         $guardianNames = $child->guardians->pluck('name')->values();
         return [
             'id' => (string) $child->id,
@@ -3617,15 +3739,26 @@ class ApiController extends Controller
         return '17:00';
     }
 
+    /** @var array<int, string> Request-scoped memoization — see attendanceTimezone(). */
+    private array $attendanceTimezoneCache = [];
+
     private function attendanceTimezone(int $organizationId): string
     {
-        $settings = OrganizationSetting::where('organization_id', $organizationId)->first();
-        $configured = $settings?->attendance_policy['attendance_timezone'] ?? $settings?->attendance_policy['timezone'] ?? null;
-        if (is_string($configured) && in_array($configured, timezone_identifiers_list(), true)) {
-            return $configured;
+        // Called once per row when mapping an attendance list/audit response — without
+        // memoizing, a 500-row attendance report issues 500 identical queries for the
+        // same organization's settings. The controller instance is created fresh per
+        // request, so this cache never leaks across requests.
+        if (array_key_exists($organizationId, $this->attendanceTimezoneCache)) {
+            return $this->attendanceTimezoneCache[$organizationId];
         }
 
-        return 'Africa/Nairobi';
+        $settings = OrganizationSetting::where('organization_id', $organizationId)->first();
+        $configured = $settings?->attendance_policy['attendance_timezone'] ?? $settings?->attendance_policy['timezone'] ?? null;
+        $timezone = (is_string($configured) && in_array($configured, timezone_identifiers_list(), true))
+            ? $configured
+            : 'Africa/Nairobi';
+
+        return $this->attendanceTimezoneCache[$organizationId] = $timezone;
     }
 
     private function tabletChildren(Request $request, string $mode): Builder
@@ -4068,7 +4201,7 @@ class ApiController extends Controller
         $this->updateOrganizationTimezone($organization, $timezone);
 
         $periodStart = now();
-        $periodEnd = $billingCycle === 'yearly' ? now()->addYear() : now()->addMonth();
+        $periodEnd = Subscription::periodEnd($billingCycle, $periodStart);
         $subscription = Subscription::create([
             'organization_id' => $organization->id,
             'pricing_plan_id' => $plan->id,
@@ -4236,19 +4369,29 @@ class ApiController extends Controller
 
     private function recordPlatformPaymentForInvoice(Request $request, PlatformInvoice $invoice, array $data): PlatformPayment
     {
-        $payment = PlatformPayment::create([
-            'organization_id' => $invoice->organization_id,
-            'invoice_id' => $invoice->id,
-            'amount' => $data['amount'],
-            'currency' => $invoice->currency,
-            'method' => $data['method'] ?? 'manual',
-            'reference' => $data['reference'] ?? null,
-            'paid_at' => isset($data['paid_at']) ? Carbon::parse($data['paid_at']) : now(),
-            'recorded_by' => $request->user()?->id,
-            'notes' => $data['notes'] ?? null,
-        ]);
-        $invoice->update(['payment_method' => $payment->method]);
-        $this->recalculatePlatformInvoice($invoice);
+        // Defense-in-depth against a double-click/retry recording a second payment for an
+        // invoice that's already fully paid, regardless of which caller reached this shared
+        // helper (webhook callers already pre-check; the manual super-admin "record payment"
+        // endpoint did not, so this guard belongs here rather than being duplicated per-caller).
+        abort_if($invoice->status === 'paid', 409, 'This invoice is already paid.');
+
+        $payment = DB::transaction(function () use ($request, $invoice, $data) {
+            $payment = PlatformPayment::create([
+                'organization_id' => $invoice->organization_id,
+                'invoice_id' => $invoice->id,
+                'amount' => $data['amount'],
+                'currency' => $invoice->currency,
+                'method' => $data['method'] ?? 'manual',
+                'reference' => $data['reference'] ?? null,
+                'paid_at' => isset($data['paid_at']) ? Carbon::parse($data['paid_at']) : now(),
+                'recorded_by' => $request->user()?->id,
+                'notes' => $data['notes'] ?? null,
+            ]);
+            $invoice->update(['payment_method' => $payment->method]);
+            $this->recalculatePlatformInvoice($invoice);
+
+            return $payment;
+        });
 
         return $payment;
     }
@@ -4288,7 +4431,7 @@ class ApiController extends Controller
             ->where('status', 'active')
             ->get();
         foreach ($admins as $admin) {
-            Mail::to($admin->email)->queue(new SubscriptionActivatedMail($subscription));
+            $this->queueMailSafely(fn () => Mail::to($admin->email)->queue(new SubscriptionActivatedMail($subscription)), 'subscription activated notification');
         }
     }
 
@@ -4419,7 +4562,7 @@ class ApiController extends Controller
             'subscription_id'      => $subscription->id,
             'invoice_number'       => 'PLAT-'.now()->format('YmdHis').'-'.Str::upper(Str::random(4)),
             'billing_period_start' => now()->toDateString(),
-            'billing_period_end'   => optional($subscription->current_period_end)->toDateString() ?? now()->addMonth()->toDateString(),
+            'billing_period_end'   => optional($subscription->current_period_end)->toDateString() ?? Subscription::periodEnd($subscription->billing_cycle, now())->toDateString(),
             'due_date'             => now()->addDays(7)->toDateString(),
             'currency'             => $plan->currency ?? 'USD',
             'subtotal'             => $amount,
@@ -4475,7 +4618,7 @@ class ApiController extends Controller
         ]);
 
         $invitation->load('organization');
-        Mail::to($invitation->email)->queue(new OrganizationInvitationMail($invitation));
+        $this->queueMailSafely(fn () => Mail::to($invitation->email)->queue(new OrganizationInvitationMail($invitation)), 'organization invitation');
 
         return $invitation;
     }
@@ -4488,9 +4631,9 @@ class ApiController extends Controller
                 $resetUrl = rtrim($this->passwordResetFrontendUrl($resetUser), '/')
                     .'/reset-password?token='.$token.'&email='.urlencode($resetUser->email);
 
-                Mail::queue('emails.password-reset', ['resetUrl' => $resetUrl], function ($message) use ($resetUser) {
+                $this->queueMailSafely(fn () => Mail::queue('emails.password-reset', ['resetUrl' => $resetUrl], function ($message) use ($resetUser) {
                     $message->to($resetUser->email)->subject('Reset your Barbaari password');
-                });
+                }), 'admin-triggered password reset');
             }
         );
     }
@@ -4886,6 +5029,12 @@ class ApiController extends Controller
             try {
                 $this->stripe->cancelSubscription($subscription->stripe_subscription_id, atPeriodEnd: true);
             } catch (\Stripe\Exception\ApiErrorException $e) {
+                \Illuminate\Support\Facades\Log::error('cancel-subscription: Stripe API error', [
+                    'organization_id' => $this->orgId($request),
+                    'subscription_id' => $subscription->id,
+                    'stripe_subscription_id' => $subscription->stripe_subscription_id,
+                    'error' => $e->getMessage(),
+                ]);
                 return response()->json(['message' => 'Stripe cancellation failed: '.$e->getMessage()], 422);
             }
         }

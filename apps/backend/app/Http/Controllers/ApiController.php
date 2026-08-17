@@ -4415,6 +4415,15 @@ class ApiController extends Controller
             $invoice->subscription->update(['status' => 'past_due']);
             $this->syncOrganizationBillingSummary($invoice->subscription->fresh(['pricingPlan']));
         }
+        // A paid invoice must advance an expired billing period, regardless of whether the
+        // subscription's status also needed to flip to active — an already-`active` but
+        // date-expired subscription (the normal case once EnsureActiveSubscription/
+        // SubscriptionAccessService started checking dates, not just status) never hits the
+        // status-flip branch below at all, since its status was already 'active'. See
+        // Subscription::renewPeriodIfExpired() for why this is safe to call unconditionally.
+        if ($invoice->subscription && $status === 'paid') {
+            $invoice->subscription->renewPeriodIfExpired();
+        }
         if ($invoice->subscription && $status === 'paid' && in_array($invoice->subscription->status, ['pending_activation', 'pending_payment', 'past_due'], true)) {
             $invoice->subscription->update(['status' => 'active']);
             $invoice->subscription->organization?->update(['status' => 'active', 'approved_at' => $invoice->subscription->organization?->approved_at ?? now()]);

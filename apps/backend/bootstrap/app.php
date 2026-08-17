@@ -52,12 +52,19 @@ return Application::configure(basePath: dirname(__DIR__))
         // this codebase plus ModelNotFoundException and AuthorizationException, both of
         // which Laravel's Handler::prepareException() already converts to an
         // HttpException/NotFoundHttpException *before* this callback runs.
+        // HttpResponseException is a fourth "already a real response" case: every named
+        // rate limiter in AppServiceProvider (auth, invitations, api, pin) sets a custom
+        // ->response() on its Limit, and Laravel's ThrottleRequests middleware throws this
+        // exact exception type to carry that response through the pipeline. Excluding it
+        // here means a throttled request still gets its intended 429 + friendly message;
+        // without this it was getting swallowed into the generic 500 below instead.
         $exceptions->render(function (\Throwable $e, \Illuminate\Http\Request $request) {
             if (! $request->expectsJson()) {
                 return null;
             }
             if ($e instanceof \Illuminate\Validation\ValidationException
                 || $e instanceof \Illuminate\Auth\AuthenticationException
+                || $e instanceof \Illuminate\Http\Exceptions\HttpResponseException
                 || $e instanceof \Symfony\Component\HttpKernel\Exception\HttpExceptionInterface) {
                 return null;
             }

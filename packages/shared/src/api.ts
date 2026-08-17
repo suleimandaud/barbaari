@@ -1,8 +1,24 @@
 import axios, { AxiosError } from "axios";
 
+// This file is bundled by two different systems that expose build-time config
+// differently, and it must keep working under both:
+// - Expo/Metro (mobile) inlines EXPO_PUBLIC_* vars onto a polyfilled `process.env` at
+//   build time.
+// - The daycare-web Vite build has no `process` (browsers don't have one) and can't use
+//   `import.meta.env` here (Metro doesn't understand `import.meta`, and this file is
+//   shared with it) — instead apps/daycare-web/vite.config.ts injects VITE_API_URL as a
+//   build-time global via esbuild's `define: { "globalThis.__BARBAARI_API_URL__": ... }`.
+//   `define` is a literal text/AST substitution at each matching occurrence of that exact
+//   expression, not a real assignment — so this MUST read `globalThis.__BARBAARI_API_URL__`
+//   directly, right here, and not through a renamed alias/local variable, or the
+//   substitution simply never matches and silently falls through instead.
 const env = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
 
-export const API_BASE_URL = env.EXPO_PUBLIC_API_URL || env.VITE_API_URL || "https://api-barbaari.pioneeriya.com/api";
+export const API_BASE_URL =
+  (globalThis as unknown as { __BARBAARI_API_URL__?: string }).__BARBAARI_API_URL__ ||
+  env.EXPO_PUBLIC_API_URL ||
+  env.VITE_API_URL ||
+  "https://api-barbaari.pioneeriya.com/api";
 
 export const api = axios.create({
   baseURL: API_BASE_URL,

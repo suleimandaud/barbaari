@@ -32,6 +32,46 @@ class Subscription extends BarbaariModel
             : $start->copy()->addDays(self::MONTHLY_PERIOD_DAYS);
     }
 
+    /**
+     * Called whenever a subscription-linked invoice is paid in full — the single place
+     * every payment-completion path (test payment, Stripe Checkout one-time payment,
+     * Stripe PaymentIntent/invoice webhooks) converges on before this method exists.
+     *
+     * A subscription whose period has already lapsed (or was never dated) gets a fresh
+     * period anchored at *now* — the customer is paying today, so today is when their new
+     * access should start, regardless of how long the old period has been expired.
+     *
+     * A subscription that still has time remaining is left completely untouched. That
+     * invoice is simply confirming/settling a period that's already correctly dated (the
+     * common case: paying within days of signing up, well before the period elapses) —
+     * touching the dates here must never shorten access the org already has, and doing
+     * nothing trivially guarantees that.
+     *
+     * This must never run for a real Stripe-managed recurring subscription's own period —
+     * but it never needs to check for that explicitly: Stripe keeps that subscription's
+     * current_period_end in the future via its own webhooks (customer.subscription.updated),
+     * so by the time this method could run for one, the "still has time remaining" branch
+     * above already protects it.
+     */
+    public function renewPeriodIfExpired(): void
+    {
+        $periodEnd = $this->current_period_end ?? $this->current_period_ends_at;
+        $isExpiredOrUnset = ! $periodEnd || $periodEnd->isPast();
+        if (! $isExpiredOrUnset) {
+            return;
+        }
+
+        $newStart = now();
+        $newEnd = self::periodEnd($this->billing_cycle, $newStart);
+
+        $this->update([
+            'current_period_start' => $newStart,
+            'current_period_end' => $newEnd,
+            'current_period_ends_at' => $newEnd,
+            'next_invoice_at' => $newEnd,
+        ]);
+    }
+
     protected $casts = [
         'trial_ends_at' => 'datetime',
         'current_period_ends_at' => 'datetime',

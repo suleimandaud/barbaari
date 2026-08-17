@@ -33,10 +33,17 @@ export function ProtectedRoute() {
     }
 
     const requestId = ++requestIdRef.current;
-    // Rapid forward/back navigation re-triggers this effect (it depends on
-    // location.pathname so the payment-gate redirect stays accurate as the user
-    // moves around) — if an older check is still in flight when a newer one starts,
-    // the older one's result must never win when it eventually resolves.
+    // This intentionally depends only on [token, retryTick] — NOT location.pathname.
+    // /auth/me sits behind the `auth` rate limiter (10/min per IP, sized for
+    // login-attempt abuse, not a per-navigation session check); this effect used to
+    // depend on the pathname too "so the payment-gate redirect stays accurate as the
+    // user moves around", which meant clicking through a handful of pages in one
+    // session could trip that limiter. Every route into this component is already a
+    // fresh mount (login navigates here for the first time; logout and the
+    // post-payment success page both hard-reload via window.location, not a
+    // client-side nav) or an explicit retry, so establishing the session once here is
+    // enough — see the effect below for how the subscription/payment gate still stays
+    // accurate without re-calling /auth/me.
     const isStale = () => requestId !== requestIdRef.current;
 
     setBearerToken(token);
@@ -58,7 +65,11 @@ export function ProtectedRoute() {
             if (isStale()) return;
             // Allow the payment page and the post-payment success page through
             // regardless of subscription status. The success page calls
-            // confirm-session itself to activate the subscription.
+            // confirm-session itself to activate the subscription, then does a hard
+            // reload back to "/" once it has — which re-mounts this component and
+            // re-runs this exact check against the now-active subscription, so a
+            // renewal correctly lands the user back on a working dashboard without
+            // needing a second effect keyed on navigation.
             const paymentExempt = location.pathname === "/subscription-payment"
               || location.pathname.startsWith("/subscription/success");
             if (billing.requires_payment && !paymentExempt) {
@@ -90,7 +101,7 @@ export function ProtectedRoute() {
           setStatus("connection_error");
         }
       });
-  }, [token, location.pathname, retryTick]);
+  }, [token, retryTick]);
 
   if (!token || status === "denied") return <Navigate to="/login" replace />;
   if (status === "checking" || status === "redirecting") return <main className="page"><LoadingState label="Checking session..." /></main>;

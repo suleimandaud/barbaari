@@ -125,6 +125,89 @@ export function SubscriptionPaymentPage() {
     );
   }
 
+  // Requires payment but no invoice is on record yet — the org's period has lapsed by
+  // date (SubscriptionAccessService::requiresPayment()) without ever being re-invoiced.
+  // This must not be confused with the genuine "still being configured" state below:
+  // that one only applies when payment ISN'T required, so no "pay" action would make
+  // sense there. payWithStripe() (unchanged) already handles this correctly server-side
+  // — createStripeCheckoutSession() now generates the renewal invoice itself before
+  // proceeding to checkout, so this button needs no invoice-specific data up front.
+  if (!hasInvoice && data?.requires_payment) {
+    const billingCycle = subscription?.billing_cycle === "yearly" ? "Yearly" : "Monthly";
+    const cyclePrice = subscription?.billing_cycle === "yearly" ? plan?.yearly_price : plan?.monthly_price;
+    const currency = plan?.currency ?? "USD";
+
+    return (
+      <main style={styles.page}>
+        <div style={styles.header}>
+          <div style={styles.brandMark}>B</div>
+          <div>
+            <div style={styles.headerEyebrow}>Barbaari</div>
+            <div style={styles.headerOrg}>{org?.name ?? "Your Organization"}</div>
+          </div>
+        </div>
+
+        {error && <div style={styles.errorBanner}>{error}</div>}
+
+        <div style={styles.card}>
+          <div style={{ textAlign: "center", padding: "8px 0 24px" }}>
+            <div style={iconCircle("danger")}>⏰</div>
+            <h1 style={styles.cardTitle}>Subscription expired</h1>
+            <p style={styles.cardSubtitle}>
+              Your {plan?.name ?? "subscription"} plan expired
+              {subscription?.current_period_end ? ` on ${dateShort(subscription.current_period_end)}` : ""}.
+              Renew now to restore access.
+            </p>
+          </div>
+
+          <div style={styles.divider} />
+
+          <div style={styles.invoiceRow}>
+            <span style={styles.invoiceLabel}>Plan</span>
+            <span style={styles.invoiceValue}>{plan?.name ?? "—"}</span>
+          </div>
+          <div style={styles.invoiceRow}>
+            <span style={styles.invoiceLabel}>Billing cycle</span>
+            <span style={styles.invoiceValue}>{billingCycle}</span>
+          </div>
+          {cyclePrice != null && (
+            <div style={styles.invoiceRow}>
+              <span style={styles.invoiceLabel}>Price</span>
+              <span style={{ ...styles.invoiceValue, fontSize: 18, fontWeight: 800, color: "#20343b" }}>
+                {fmt(cyclePrice, currency)}
+                <span style={styles.pricePer}>{subscription?.billing_cycle === "yearly" ? "/year" : "/month"}</span>
+              </span>
+            </div>
+          )}
+          {subscription?.current_period_end && (
+            <div style={styles.invoiceRow}>
+              <span style={styles.invoiceLabel}>Expired on</span>
+              <span style={{ ...styles.invoiceValue, color: "#b45309", fontWeight: 700 }}>
+                {dateShort(subscription.current_period_end)}
+              </span>
+            </div>
+          )}
+
+          <div style={styles.divider} />
+
+          <button
+            style={{ ...styles.primaryBtn, ...(paying ? styles.btnDisabled : {}) }}
+            disabled={paying}
+            onClick={payWithStripe}
+          >
+            {paying ? <><span style={styles.btnSpinner} /> Working…</> : "Renew subscription →"}
+          </button>
+          <p style={styles.stripeNote}>Secure payment via Stripe. Barbaari never stores card details.</p>
+
+          <div style={styles.otherActions}>
+            <button style={styles.ghostBtn} onClick={() => { clearSession(); location.href = "/login"; }}>Logout</button>
+            <a href="mailto:support@barbaari.app" style={styles.ghostBtn}>Contact support</a>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   if (!hasInvoice) {
     return (
       <main style={styles.page}>

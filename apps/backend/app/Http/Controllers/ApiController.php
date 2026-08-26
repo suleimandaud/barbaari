@@ -1689,8 +1689,29 @@ class ApiController extends Controller
     public function createStripeCheckoutSession(Request $request)
     {
         $subscription = Subscription::with('pricingPlan', 'organization')->where('organization_id', $this->orgId($request))->latest()->first();
-        $invoice = PlatformInvoice::where('organization_id', $this->orgId($request))->whereIn('status', ['open', 'partial', 'overdue'])->oldest('due_date')->first();
         abort_unless($subscription, 422, 'No active subscription found for this organization.');
+
+        $invoice = PlatformInvoice::where('organization_id', $this->orgId($request))->whereIn('status', ['open', 'partial', 'overdue'])->oldest('due_date')->first();
+
+        // A subscription can be expired (SubscriptionAccessService::requiresPayment())
+        // with no open invoice on record — e.g. the period lapsed by date and nothing was
+        // ever manually re-invoiced. Checkout has nothing to charge for in that state, so
+        // generate the renewal invoice here rather than dead-ending the customer. Reuses
+        // the exact same canonical invoice-generation method every other invoice-creation
+        // path already calls (organization onboarding, plan-change, generateOrgInvoice()) —
+        // it reads the subscription's real pricing plan/billing cycle and already
+        // deduplicates against any open/partial/overdue invoice, so this can never create a
+        // second invoice alongside one that already exists.
+        if (! $invoice && $this->subscriptionAccess->requiresPayment($subscription)) {
+            $invoice = $this->ensureSubscriptionInvoice($subscription);
+            if ($invoice) {
+                $this->platformAudit($request, 'platform_invoice.auto_generated_for_checkout', $subscription->organization, [
+                    'invoice_id' => $invoice->id,
+                    'amount' => $invoice->total_amount,
+                ]);
+            }
+        }
+
         abort_unless($invoice, 422, 'No unpaid platform invoice is available for checkout.');
 
         if (! $this->stripe->isConfigured()) {

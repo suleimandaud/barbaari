@@ -28,6 +28,7 @@ Route::prefix('auth')->middleware('throttle:auth')->group(function () {
         Route::post('verify-pin', [AuthController::class, 'verifyPin']);
         Route::post('password-reset-smoke', [AuthController::class, 'passwordResetSmoke'])->middleware('role:super_admin,support_staff');
         Route::post('logout', [AuthController::class, 'logout']);
+        Route::delete('account', [AuthController::class, 'deleteAccount']);
     });
 });
 
@@ -244,7 +245,7 @@ Route::middleware(['auth:sanctum', 'throttle:api', 'subscription.active'])->grou
         Route::patch('users/{user}/block', [ApiController::class, 'blockPlatformUser']);
         Route::patch('users/{user}/unblock', [ApiController::class, 'unblockPlatformUser']);
         Route::post('users/{user}/reset-account', [ApiController::class, 'resetPlatformUser']);
-        Route::patch('users/{user}/role', [ApiController::class, 'updatePlatformUserRole']);
+        Route::patch('users/{user}/role', [ApiController::class, 'updatePlatformUserRole'])->middleware('role:super_admin');
         Route::get('support', [ApiController::class, 'supportTickets']);
         Route::get('support-tickets', [ApiController::class, 'supportTickets']);
         Route::post('support-tickets', [ApiController::class, 'createSupportTicket']);
@@ -272,15 +273,15 @@ Route::middleware(['auth:sanctum', 'throttle:api', 'subscription.active'])->grou
 
     Route::prefix('super-admin')->middleware('role:super_admin,support_staff')->group(function () {
         Route::get('pricing-plans', [ApiController::class, 'platformPricingPlans']);
-        Route::post('pricing-plans', [ApiController::class, 'createPricingPlan']);
-        Route::match(['put', 'patch'], 'pricing-plans/{plan}', [ApiController::class, 'updatePricingPlan']);
-        Route::patch('pricing-plans/{plan}/activate', [ApiController::class, 'activatePricingPlan']);
-        Route::patch('pricing-plans/{plan}/deactivate', [ApiController::class, 'deactivatePricingPlan']);
+        Route::post('pricing-plans', [ApiController::class, 'createPricingPlan'])->middleware('role:super_admin');
+        Route::match(['put', 'patch'], 'pricing-plans/{plan}', [ApiController::class, 'updatePricingPlan'])->middleware('role:super_admin');
+        Route::patch('pricing-plans/{plan}/activate', [ApiController::class, 'activatePricingPlan'])->middleware('role:super_admin');
+        Route::patch('pricing-plans/{plan}/deactivate', [ApiController::class, 'deactivatePricingPlan'])->middleware('role:super_admin');
         Route::get('users', [ApiController::class, 'platformUsers']);
         Route::patch('users/{user}/block', [ApiController::class, 'blockPlatformUser']);
         Route::patch('users/{user}/unblock', [ApiController::class, 'unblockPlatformUser']);
         Route::post('users/{user}/reset-account', [ApiController::class, 'resetPlatformUser']);
-        Route::patch('users/{user}/role', [ApiController::class, 'updatePlatformUserRole']);
+        Route::patch('users/{user}/role', [ApiController::class, 'updatePlatformUserRole'])->middleware('role:super_admin');
         Route::get('support-tickets', [ApiController::class, 'supportTickets']);
         Route::post('support-tickets', [ApiController::class, 'createSupportTicket']);
         Route::match(['put', 'patch'], 'support-tickets/{ticket}', [ApiController::class, 'updateSupportTicket']);

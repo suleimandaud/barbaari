@@ -122,6 +122,9 @@ export const authApi = {
     } finally {
       setBearerToken(undefined);
     }
+  },
+  deleteAccount(password: string) {
+    return data<{ message: string }>(api.delete("/auth/account", { data: { password } }));
   }
 };
 
@@ -261,8 +264,8 @@ export const attendanceApi = {
   guardianCheckOut(payload: Record<string, unknown>) {
     return data<{ attendance: any }>(api.post("/attendance/guardian-check-out", payload));
   },
-  auditLogs() {
-    return data<ListResponse<any, "audit_logs">>(api.get("/attendance/audit-logs"));
+  auditLogs(params?: { limit?: number; attendance_record_id?: string | number }) {
+    return data<ListResponse<any, "audit_logs">>(api.get("/attendance/audit-logs", { params }));
   },
   export() {
     return data<{ message: string }>(api.get("/attendance/export"));
@@ -292,6 +295,21 @@ export const tabletApi = {
     return data<{ absence_record: any }>(api.post("/tablet/absence-records", payload));
   }
 };
+
+/**
+ * Attendance/absence list filters understood by the API. Omitting them returns the full
+ * history, which grows every day — pages should request only the dates they display.
+ * `open: 1` returns every checked-in record still missing a checkout, on any date.
+ */
+export type AttendanceListParams = { date?: string; from?: string; to?: string; open?: 1 };
+
+/** Fetches several filtered attendance lists and merges them, dropping duplicates by id. */
+export async function mergedAttendance(queries: AttendanceListParams[], list = attendanceApi.managerList) {
+  const results = await Promise.all(queries.map((params) => list(params)));
+  const byId = new Map<string, any>();
+  for (const record of results.flatMap((result) => result.attendance ?? [])) byId.set(String(record.id), record);
+  return [...byId.values()];
+}
 
 export const absenceApi = {
   list(params?: Record<string, unknown>) {

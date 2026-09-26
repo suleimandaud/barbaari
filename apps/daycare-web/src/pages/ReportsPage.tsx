@@ -21,14 +21,17 @@ export function ReportsPage() {
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const { data, loading, error, reload } = useAsyncData(async () => {
+    // Attendance and absences follow the report's date range server-side (every row shown
+    // below is filtered to that range anyway); an empty bound still means "unbounded".
+    const range = { from: fromDate || undefined, to: toDate || undefined };
     const [attendance, absences, auditLogs, organization] = await Promise.all([
-      attendanceApi.managerList(),
-      absenceApi.list(),
+      attendanceApi.managerList(range),
+      absenceApi.list(range),
       attendanceApi.auditLogs(),
       organizationApi.get()
     ]);
     return { attendance: attendance.attendance ?? [], absences: absences.absence_records ?? [], auditLogs: auditLogs.audit_logs ?? [], organization: organization.organization };
-  }, []);
+  }, [fromDate, toDate]);
 
   const reportRows = useMemo(() => {
     const attendance = (data?.attendance ?? []).filter((record: any) => (!fromDate || record.date >= fromDate) && (!toDate || record.date <= toDate));

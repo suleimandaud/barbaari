@@ -106,6 +106,44 @@ class AuthController extends Controller
         return response()->json(['message' => 'Logged out']);
     }
 
+    /**
+     * Self-service account deletion (App Store guideline 5.1.1(v): an app that lets people
+     * create an account must let them delete it). Only parent accounts can be created from
+     * the app, so only those are self-deletable; staff/admin accounts belong to their
+     * organization and are removed by its administrator. Every foreign key to users is
+     * nullOnDelete/cascade, so attendance and audit history stay intact with the actor unset.
+     */
+    public function deleteAccount(Request $request)
+    {
+        $data = $request->validate(['password' => ['required', 'string']]);
+        $user = $request->user();
+
+        if ($user->role !== 'parent') {
+            return response()->json(['message' => 'This account is managed by your daycare. Ask your daycare administrator to remove it.'], 403);
+        }
+        if (! Hash::check($data['password'], $user->password)) {
+            throw ValidationException::withMessages(['password' => ['The password is incorrect.']]);
+        }
+
+        DB::transaction(function () use ($user) {
+            \App\Models\AuditLog::create([
+                'organization_id' => $user->organization_id,
+                'actor_id' => null,
+                'action' => 'user.self_deleted',
+                'target_type' => User::class,
+                'target_id' => $user->id,
+                'changes' => ['role' => $user->role],
+                'ip_address' => request()->ip(),
+            ]);
+            Guardian::where('user_id', $user->id)->update(['user_id' => null]);
+            $user->tokens()->delete();
+            $user->roles()->detach();
+            $user->delete();
+        });
+
+        return response()->json(['message' => 'Your account has been deleted.']);
+    }
+
     public function verifyPin(Request $request)
     {
         $data = $request->validate([
@@ -138,7 +176,15 @@ class AuthController extends Controller
         if (! in_array($user->role, $this->pinRoles, true)) {
             return response()->json(['message' => 'Only staff, teacher, daycare admin, or manager accounts can use attendance PIN login.'], 403);
         }
-        $response = $this->attemptPin($request, $user, $data['pin'], $data['purpose'] ?? 'staff_quick_access')->getData(true);
+        $attempt = $this->attemptPin($request, $user, $data['pin'], $data['purpose'] ?? 'staff_quick_access');
+        // attemptPin() *returns* (rather than throws) a 423 for a locked account and a 403
+        // for an inactive one. Those responses must be passed straight through — issuing a
+        // token after them would let anyone lock an account with five wrong PINs and then
+        // receive a valid API token on the sixth request without knowing the PIN.
+        if ($attempt->getStatusCode() !== 200) {
+            return $attempt;
+        }
+        $response = $attempt->getData(true);
 
         return response()->json([
             'user' => $user->load('organization', 'staffProfile.classroom'),
@@ -185,6 +231,13 @@ class AuthController extends Controller
             ], 402);
         }
         $mode = $data['mode'] ?? $this->tabletModeForUser($user);
+        // A tablet unlock returns a full API token, and staff/admin mode accept a 4-digit PIN
+        // (10,000 combinations). The per-IP route throttle alone doesn't stop a distributed
+        // guess, so this shares attemptPin()'s per-account lockout counter.
+        if (in_array($mode, ['staff', 'admin'], true) && $user->pin_locked_until && $user->pin_locked_until->isFuture()) {
+            $this->pinLog($request, $user, false, $data['purpose'] ?? 'tablet_'.$mode, 'locked');
+            return response()->json(['message' => 'PIN is temporarily locked. Please try again later.'], 423);
+        }
         if ($mode === 'guardian') {
             return response()->json(['message' => 'Parents and guardians do not unlock tablet mode. Ask provider staff to open the tablet and select you as the signer.'], 403);
         } elseif ($mode === 'staff') {
@@ -196,6 +249,9 @@ class AuthController extends Controller
             }
             $credential = $data['pin'] ?? $data['password_or_pin'] ?? '';
             if (! $user->pin_hash || ! Hash::check($credential, $user->pin_hash)) {
+                if ($user->pin_hash) {
+                    $this->recordFailedPinAttempt($user);
+                }
                 $this->pinLog($request, $user, false, $data['purpose'] ?? 'tablet_staff', $user->pin_hash ? 'invalid_pin' : 'pin_not_set');
                 throw ValidationException::withMessages(['pin' => [$user->pin_hash ? 'Incorrect staff PIN.' : 'No staff PIN is set. Reset it from Staff Access.']]);
             }
@@ -210,6 +266,7 @@ class AuthController extends Controller
             $passwordOk = $credential && Hash::check($credential, $user->password);
             $pinOk = $credential && $user->pin_hash && Hash::check($credential, $user->pin_hash);
             if (! $passwordOk && ! $pinOk) {
+                $this->recordFailedPinAttempt($user);
                 $this->pinLog($request, $user, false, $data['purpose'] ?? 'tablet_admin', $user->pin_hash ? 'invalid_admin_credential' : 'pin_not_set');
                 throw ValidationException::withMessages(['pin' => [$user->pin_hash ? 'Incorrect admin/manager PIN or password.' : 'Use the admin password, or reset an admin/manager tablet PIN from Staff Access.']]);
             }
@@ -275,6 +332,9 @@ class AuthController extends Controller
             $request->only('email', 'password', 'password_confirmation', 'token'),
             function (User $user, string $password) {
                 $user->forceFill(['password' => Hash::make($password), 'remember_token' => Str::random(60)])->save();
+                // A password reset is the standard response to a suspected compromise, so
+                // every API token issued under the old credentials must stop working too.
+                $user->tokens()->delete();
                 event(new PasswordReset($user));
             }
         );
@@ -426,7 +486,7 @@ class AuthController extends Controller
         ]);
     }
 
-    private function attemptPin(Request $request, User $user, string $pin, string $purpose)
+    private function attemptPin(Request $request, User $user, string $pin, string $purpose): \Illuminate\Http\JsonResponse
     {
         if ($user->status !== 'active') {
             return response()->json(['message' => 'This staff account is inactive.'], 403);
@@ -443,11 +503,7 @@ class AuthController extends Controller
         }
 
         if (! Hash::check($pin, $user->pin_hash)) {
-            $attempts = (int) $user->pin_failed_attempts + 1;
-            $user->forceFill([
-                'pin_failed_attempts' => $attempts,
-                'pin_locked_until' => $attempts >= 5 ? now()->addMinutes(5) : null,
-            ])->save();
+            $this->recordFailedPinAttempt($user);
             $this->pinLog($request, $user, false, $purpose, 'invalid_pin');
             throw ValidationException::withMessages(['pin' => ['Incorrect staff PIN.']]);
         }
@@ -460,6 +516,17 @@ class AuthController extends Controller
             'pin_verification_id' => $log->id,
             'verified_at' => optional($log->verified_at)->toDateTimeString(),
         ]);
+    }
+
+    private function recordFailedPinAttempt(User $user): void
+    {
+        // Increment in SQL rather than read-modify-write, so parallel guesses can't each read
+        // the same count and slip past the lockout threshold together.
+        User::whereKey($user->id)->increment('pin_failed_attempts');
+        $attempts = (int) User::whereKey($user->id)->value('pin_failed_attempts');
+        if ($attempts >= 5) {
+            User::whereKey($user->id)->update(['pin_locked_until' => now()->addMinutes(5)]);
+        }
     }
 
     private function pinLog(Request $request, User $user, bool $success, string $purpose, ?string $failureReason): PinVerificationLog

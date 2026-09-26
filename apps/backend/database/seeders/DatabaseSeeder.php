@@ -41,6 +41,14 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
+        // Demo fixtures only: every seeded account uses a published password, including a
+        // super admin. `migrate --seed --force` must not be able to plant them in production.
+        if (app()->isProduction()) {
+            $this->command?->error('DatabaseSeeder creates demo accounts and is disabled when APP_ENV=production.');
+
+            return;
+        }
+
         $roles = collect([
             'super_admin' => 'Super Admin',
             'daycare_admin' => 'Daycare Admin',

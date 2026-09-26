@@ -50,7 +50,10 @@ return [
     |
     */
 
-    'expiration' => null,
+    // Unset keeps the historical behaviour (tokens never expire, which long-running tablet
+    // kiosks rely on). Set SANCTUM_TOKEN_EXPIRATION_MINUTES (e.g. 43200 = 30 days) to bound
+    // the lifetime of a leaked token, and schedule `php artisan sanctum:prune-expired`.
+    'expiration' => env('SANCTUM_TOKEN_EXPIRATION_MINUTES') ? (int) env('SANCTUM_TOKEN_EXPIRATION_MINUTES') : null,
 
     /*
     |--------------------------------------------------------------------------

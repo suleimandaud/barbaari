@@ -34,3 +34,15 @@ artifacts/
 apps/daycare-web/dist/
 apps/super-admin/dist/
 *.tsbuildinfo
+
+# Test/tooling output
+test-results/
+playwright-report/
+*.backup
+
+# Local Claude Code settings (per-developer)
+.claude/settings.local.json
+
+# Expo prebuild output (generated from app.json; not tracked)
+apps/mobile/ios/
+apps/mobile/android/

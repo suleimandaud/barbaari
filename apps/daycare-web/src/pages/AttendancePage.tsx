@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { absenceApi, attendanceApi, authApi, childrenApi, classroomsApi, formatAttendanceTime, getApiError, organizationApi } from "@barbaari/shared";
+import { absenceApi, attendanceApi, authApi, childrenApi, classroomsApi, formatAttendanceTime, getApiError, mergedAttendance, organizationApi } from "@barbaari/shared";
 import { PageHeader, Panel } from "../components/Page";
 import { DataTable } from "../components/DataTable";
 import { Badge, ErrorState, LoadingState } from "../components/Status";
@@ -73,23 +73,26 @@ function browserLocation(): Promise<{ latitude: number; longitude: number }> {
 export function AttendancePage() {
   const isOnline = useOnlineStatus();
   const [searchParams, setSearchParams] = useSearchParams();
+  const today = new Date().toISOString().slice(0, 10);
+  const [filterDate, setFilterDate] = useState(today);
   const { data, loading, error, reload } = useAsyncData(async () => {
-    const [attendance, absences, children, classrooms, auditLogs, organization] = await Promise.all([
-      attendanceApi.managerList(),
-      absenceApi.list(),
+    // Every view on this page is keyed to either the date filter or today (live stats), so
+    // only those dates are requested — clearing the date filter still loads full history.
+    const dates = filterDate ? [...new Set([filterDate, today])] : [];
+    const [attendance, absenceLists, children, classrooms, organization] = await Promise.all([
+      dates.length ? mergedAttendance(dates.map((date) => ({ date }))) : attendanceApi.managerList().then((result) => result.attendance),
+      Promise.all(dates.length ? dates.map((date) => absenceApi.list({ date })) : [absenceApi.list()]),
       childrenApi.managerList(),
       classroomsApi.list(),
-      attendanceApi.auditLogs(),
       organizationApi.get()
     ]);
-    return { attendance: attendance.attendance, absences: absences.absence_records, children: children.children, classrooms: classrooms.classrooms, auditLogs: auditLogs.audit_logs, organization: organization.organization };
-  }, []);
-  const today = new Date().toISOString().slice(0, 10);
+    const absences = [...new Map(absenceLists.flatMap((list) => list.absence_records ?? []).map((record: any) => [String(record.id), record])).values()];
+    return { attendance, absences, children: children.children, classrooms: classrooms.classrooms, organization: organization.organization };
+  }, [filterDate, today]);
   const nowForInput = useMemo(() => new Date().toISOString().slice(0, 16), []);
   const [actionDate, setActionDate] = useState(today);
   const [actionClassroomId, setActionClassroomId] = useState("");
   const [actionChildId, setActionChildId] = useState("");
-  const [filterDate, setFilterDate] = useState(today);
   const [filterClassroomId, setFilterClassroomId] = useState("");
   const [filterChildId, setFilterChildId] = useState("");
   const [status, setStatus] = useState("");
@@ -101,6 +104,18 @@ export function AttendancePage() {
   const [recordTab, setRecordTab] = useState(initialRecordTab(searchParams.get("tab") ?? searchParams.get("view")));
   const [selectedRecord, setSelectedRecord] = useState<any | null>(null);
   const [showAuditFor, setShowAuditFor] = useState<any | null>(null);
+  // Audit entries are fetched for the one record being inspected, rather than loading the
+  // organization's whole audit history up front on every page load and every action.
+  const [recordAuditLogs, setRecordAuditLogs] = useState<{ recordId: string; logs: any[] } | null>(null);
+  useEffect(() => {
+    if (!showAuditFor) return;
+    let active = true;
+    const recordId = String(showAuditFor.id);
+    attendanceApi.auditLogs({ attendance_record_id: recordId })
+      .then((response) => { if (active) setRecordAuditLogs({ recordId, logs: response.audit_logs ?? [] }); })
+      .catch(() => { if (active) setRecordAuditLogs({ recordId, logs: [] }); });
+    return () => { active = false; };
+  }, [showAuditFor]);
   const [signingChild, setSigningChild] = useState<any | null>(null);
   const [signers, setSigners] = useState<any[]>([]);
   const [signerValue, setSignerValue] = useState("");
@@ -738,7 +753,7 @@ export function AttendancePage() {
 
       {showAuditFor ? (
         <Modal title={`Audit log: ${showAuditFor.childName}`} onClose={() => setShowAuditFor(null)}>
-          <DataTable rows={(data?.auditLogs ?? []).filter((log: any) => String(log.attendance_record_id) === String(showAuditFor.id))} emptyTitle="No audit entries for this record." emptyDetail="Corrections and check-in/out edits will appear here." columns={[
+          <DataTable rows={recordAuditLogs?.recordId === String(showAuditFor.id) ? recordAuditLogs.logs.filter((log: any) => String(log.attendance_record_id) === String(showAuditFor.id)) : []} emptyTitle={recordAuditLogs?.recordId === String(showAuditFor.id) ? "No audit entries for this record." : "Loading audit entries..."} emptyDetail="Corrections and check-in/out edits will appear here." columns={[
             { header: "Action", render: (row: any) => row.action },
             { header: "Reason", render: (row: any) => row.reason },
             { header: "Edited by", render: (row: any) => row.editedBy ?? row.editedByEmail ?? "System" },

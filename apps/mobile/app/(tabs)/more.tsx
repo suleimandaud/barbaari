@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { colors } from "@barbaari/shared";
+import { useState } from "react";
+import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { authApi, colors, getApiError } from "@barbaari/shared";
 import { Button, Card, Screen, SectionTitle } from "../../components/Ui";
 import { logoutMobile } from "../../services/auth";
 import { useMobileSession } from "../../hooks/useMobileSession";
@@ -45,8 +46,70 @@ export default function More() {
           <Text style={styles.muted}>{user?.email}</Text>
           <Button variant="outline" onPress={async () => { await logoutMobile(); router.replace("/login"); }}>Logout</Button>
         </Card>
+        <DeleteAccountCard canSelfDelete={area === "parent"} />
       </ScrollView>
     </Screen>
+  );
+}
+
+// App Store guideline 5.1.1(v): accounts created in the app (parent registration) must be
+// deletable in the app. Staff/admin accounts are created and removed by their daycare.
+function DeleteAccountCard({ canSelfDelete }: { canSelfDelete: boolean }) {
+  const [confirming, setConfirming] = useState(false);
+  const [password, setPassword] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+
+  if (!canSelfDelete) {
+    return (
+      <Card>
+        <Text style={styles.name}>Delete account</Text>
+        <Text style={styles.muted}>Staff accounts are managed by your daycare. Ask your daycare administrator to remove your account.</Text>
+      </Card>
+    );
+  }
+
+  async function deleteAccount() {
+    setError("");
+    if (!password) {
+      setError("Enter your password to confirm.");
+      return;
+    }
+    setDeleting(true);
+    try {
+      await authApi.deleteAccount(password);
+      await logoutMobile();
+      router.replace("/login");
+    } catch (err) {
+      setError(getApiError(err).message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <Card>
+      <Text style={styles.name}>Delete account</Text>
+      <Text style={styles.muted}>Permanently delete your Barbaari parent account. Attendance records kept by your daycare are not affected.</Text>
+      {confirming ? (
+        <>
+          <TextInput
+            value={password}
+            onChangeText={setPassword}
+            placeholder="Confirm with your password"
+            secureTextEntry
+            autoCapitalize="none"
+            style={styles.input}
+            placeholderTextColor={colors.muted}
+          />
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+          <Button disabled={deleting} onPress={deleteAccount}>{deleting ? "Deleting..." : "Permanently delete account"}</Button>
+          <Button variant="outline" disabled={deleting} onPress={() => { setConfirming(false); setPassword(""); setError(""); }}>Cancel</Button>
+        </>
+      ) : (
+        <Button variant="outline" onPress={() => setConfirming(true)}>Delete account</Button>
+      )}
+    </Card>
   );
 }
 
@@ -69,5 +132,7 @@ const styles = StyleSheet.create({
   iconWrap: { width: 42, height: 42, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: colors.white },
   tileTitle: { color: colors.text, fontSize: 16, fontWeight: "900" },
   name: { color: colors.text, fontSize: 18, fontWeight: "900" },
-  muted: { color: colors.muted, lineHeight: 21 }
+  muted: { color: colors.muted, lineHeight: 21 },
+  input: { borderWidth: 1, borderColor: colors.border, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, color: colors.text, backgroundColor: colors.white },
+  error: { color: colors.danger, fontWeight: "700" }
 });

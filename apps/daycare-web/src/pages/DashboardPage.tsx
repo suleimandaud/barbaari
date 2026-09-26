@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Activity, DoorOpen, FileSignature, TabletSmartphone } from "lucide-react";
-import { absenceApi, attendanceApi, childrenApi, classroomsApi, devicesApi, formatAttendanceTime, organizationApi } from "@barbaari/shared";
+import { absenceApi, attendanceApi, childrenApi, classroomsApi, devicesApi, formatAttendanceTime, mergedAttendance, organizationApi } from "@barbaari/shared";
 import { useAsyncData } from "../hooks/useAsyncData";
 import { ErrorState, LoadingState } from "../components/Status";
 import { PageHeader, Panel } from "../components/Page";
@@ -10,8 +10,12 @@ function recordStatus(record: any) {
   return record?.status ?? (record?.checkOutTime ? "checked_out" : "checked_in");
 }
 
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function isToday(value?: string) {
-  return value === new Date().toISOString().slice(0, 10);
+  return value === todayKey();
 }
 
 function childClassroomId(child: any, classrooms: any[]) {
@@ -21,17 +25,21 @@ function childClassroomId(child: any, classrooms: any[]) {
 
 export function DashboardPage() {
   const { data, loading, error, reload } = useAsyncData(async () => {
+    const today = todayKey();
+    // Only what this page renders: today's records, plus every still-open check-in (the
+    // "missing checkout" tile spans all dates), today's absences, and the latest 6 audit
+    // events — instead of the organization's entire attendance and audit history.
     const [attendance, absences, children, classrooms, devices, auditLogs, organization] = await Promise.all([
-      attendanceApi.managerList(),
-      absenceApi.list(),
+      mergedAttendance([{ date: today }, { open: 1 }]),
+      absenceApi.list({ date: today }),
       childrenApi.managerList(),
       classroomsApi.list(),
       devicesApi.list(),
-      attendanceApi.auditLogs(),
+      attendanceApi.auditLogs({ limit: 6 }),
       organizationApi.get()
     ]);
     return {
-      attendance: attendance.attendance ?? [],
+      attendance,
       absences: absences.absence_records ?? [],
       children: children.children ?? [],
       classrooms: classrooms.classrooms ?? [],

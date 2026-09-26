@@ -21,11 +21,17 @@ class AppServiceProvider extends ServiceProvider
 
     private function configureRateLimiting(): void
     {
-        // Auth endpoints: 10 requests per minute per IP
+        // Auth endpoints: 10 requests per minute per IP, plus 20 per minute per target email
+        // so a guessing attempt spread across many IPs is still bounded for each account.
         RateLimiter::for('auth', function (Request $request) {
-            return Limit::perMinute(10)->by($request->ip())->response(function () {
-                return response()->json(['message' => 'Too many login attempts. Please try again in a minute.'], 429);
-            });
+            $tooMany = fn () => response()->json(['message' => 'Too many login attempts. Please try again in a minute.'], 429);
+            $limits = [Limit::perMinute(10)->by($request->ip())->response($tooMany)];
+            $email = strtolower(trim((string) $request->input('email')));
+            if ($email !== '') {
+                $limits[] = Limit::perMinute(20)->by('auth-email:'.sha1($email))->response($tooMany);
+            }
+
+            return $limits;
         });
 
         // Invite endpoints: 5 per minute per IP

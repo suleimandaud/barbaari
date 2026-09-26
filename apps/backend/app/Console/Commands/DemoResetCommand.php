@@ -58,6 +58,14 @@ class DemoResetCommand extends Command
 
     public function handle(): int
     {
+        // This wipes/recreates demo data and creates accounts with a published password
+        // (including a super admin). It must never run against a production database.
+        if (app()->isProduction()) {
+            $this->error('barbaari:demo-reset is disabled when APP_ENV=production.');
+
+            return self::FAILURE;
+        }
+
         DB::transaction(function () {
             $roleModels = collect($this->roles)->mapWithKeys(fn ($label, $name) => [
                 $name => Role::updateOrCreate(['name' => $name], ['label' => $label]),

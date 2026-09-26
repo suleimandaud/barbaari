@@ -12,25 +12,38 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      "expo-notifications",
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Barbaari needs your location to confirm attendance is being recorded at the daycare's registered address."
+          "locationWhenInUsePermission": "Barbaari needs your location to confirm attendance is being recorded at the daycare's registered address.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "locationAlwaysPermission": false
         }
       ],
       "expo-font"
     ],
     "ios": {
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Barbaari needs your location to confirm attendance is being recorded at the daycare's registered address."
-      }
+        "NSLocationWhenInUseUsageDescription": "Barbaari needs your location to confirm attendance is being recorded at the daycare's registered address.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.pioneeriya.barbaari",
+      "supportsTablet": true
     },
     "android": {
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
+      ],
+      "package": "com.pioneeriya.barbaari",
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
+    },
+    "experiments": {
+      "tsconfigPaths": false
     }
   }
 }

@@ -76,8 +76,15 @@ class User extends Authenticatable
         return $this->hasOne(StaffProfile::class);
     }
 
+    /**
+     * The `role` column is the single source of truth — it's what every in-controller
+     * permission check, the subscription bypass, and the UI all read. The role_user pivot is
+     * only ever a mirror of it (every role write syncs the pivot to exactly that one role),
+     * so it is deliberately not consulted here: a pivot row left behind by an older role
+     * change must never keep granting a role the user no longer has.
+     */
     public function hasAnyRole(array $roles): bool
     {
-        return in_array($this->role, $roles, true) || $this->roles()->whereIn('name', $roles)->exists();
+        return in_array($this->role, $roles, true);
     }
 }

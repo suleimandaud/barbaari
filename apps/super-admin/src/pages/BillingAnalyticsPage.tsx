@@ -22,15 +22,15 @@ export function BillingAnalyticsPage() {
   const loading = ovLoading || mLoading || tLoading;
   const error = ovError || mError || tError;
 
-  if (loading) return <section className="page"><Header eyebrow="Platform" title="Billing Analytics" /><LoadingState /></section>;
-  if (error) return <section className="page"><Header eyebrow="Platform" title="Billing Analytics" /><ErrorState message={error} /></section>;
+  if (loading) return <section className="bb-page"><Header eyebrow="Platform" title="Billing Analytics" /><LoadingState /></section>;
+  if (error) return <section className="bb-page"><Header eyebrow="Platform" title="Billing Analytics" /><ErrorState message={error} /></section>;
 
   const ov = overview!;
   const months = monthly?.revenue_by_month ?? [];
   const chartData = months.map((m) => ({ month: m.month.slice(5), revenue: m.revenue }));
 
   return (
-    <section className="page">
+    <section className="bb-page">
       <Header eyebrow="Platform" title="Billing Analytics" />
 
       <div className="metrics">
@@ -44,11 +44,11 @@ export function BillingAnalyticsPage() {
         <div style={{ height: 260 }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#94a3b8" }} />
-              <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} tickFormatter={(v) => `$${v}`} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#D9E0DF" />
+              <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#53656A" }} />
+              <YAxis tick={{ fontSize: 11, fill: "#53656A" }} tickFormatter={(v) => `$${v}`} />
               <Tooltip formatter={(value: number) => [money(value), "Revenue"]} />
-              <Bar dataKey="revenue" fill="#2563eb" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="revenue" fill="#2F8F98" radius={[2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -70,7 +70,7 @@ export function BillingAnalyticsPage() {
                 </tr>
               ))}
               {(topOrgs?.top_organizations ?? []).length === 0 && (
-                <tr><td colSpan={4} style={{ textAlign: "center", color: "#94a3b8" }}>No payment data yet.</td></tr>
+                <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--bb-neutral-700)" }}>No payment data yet.</td></tr>
               )}
             </tbody>
           </table>

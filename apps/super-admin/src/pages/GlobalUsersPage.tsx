@@ -44,7 +44,7 @@ export function GlobalUsersPage() {
     }
   }
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Identity" title="Global users" />
     <Alert message={success} />
     <Alert message={actionError} tone="danger" />

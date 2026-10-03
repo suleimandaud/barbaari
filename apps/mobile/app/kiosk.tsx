@@ -3,10 +3,9 @@ import * as Location from "expo-location";
 import * as Network from "expo-network";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, KeyboardAvoidingView, PanResponder, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from "react-native";
+import { Alert, KeyboardAvoidingView, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { DEFAULT_ATTENDANCE_TIMEZONE, colors, formatAttendanceTime, getApiError } from "@barbaari/shared";
-import { Button, Badge } from "../components/Ui";
+import { DEFAULT_ATTENDANCE_TIMEZONE, formatAttendanceTime, getApiError } from "@barbaari/shared";
 import { SubscriptionRequiredScreen } from "../components/SubscriptionRequiredScreen";
 import { useMobileSession } from "../hooks/useMobileSession";
 import { unlockTablet } from "../services/auth";
@@ -41,10 +40,32 @@ const absenceTypes: Array<[AbsenceType, string]> = [
   ["other", "Other"]
 ];
 
+// Redesign 2026 tokens (design/redesign-2026/tokens.md), kept local to the tablet kiosk so
+// the shared mobile `colors` used by the phone screens stay exactly as they were.
+const k = {
+  brand: "#2F8F98", accent: "#237680", accent600: "#1E6A73", accent100: "#E7F4F5",
+  text: "#173236", bg: "#F8F6F1", surface: "#EFECE4", divider: "#D9E0DF", neutral200: "#E7E4DD",
+  neutral700: "#53656A", neutral800: "#3A4B4E", white: "#FFFFFF",
+  okBg: "#E1EFE6", okFg: "#22573A", mutedBg: "#E7E4DD", mutedFg: "#3A4B4E", absentBg: "#E4EAF1", absentFg: "#30445A",
+  warnBg: "#FAEFD6", warnFg: "#6E4C0E", dangerBg: "#F7E1DC", dangerFg: "#8A2E22"
+};
+// Source Serif 4 isn't bundled in the app, so the kiosk uses the platform serif.
+const serif = Platform.select({ ios: "Georgia", android: "serif", default: undefined });
+
 const actionTone: Record<Action, string> = {
-  in: colors.primary,
-  out: colors.neutral,
-  absent: colors.tertiary
+  in: k.accent,
+  out: k.neutral700,
+  absent: k.warnFg
+};
+
+// Every status shows an icon plus a word (design rule).
+const statusStyle: Record<ChildStatus, { bg: string; fg: string; icon: keyof typeof Ionicons.glyphMap; label: string }> = {
+  "not checked in": { bg: k.mutedBg, fg: k.mutedFg, icon: "ellipse-outline", label: "Not arrived" },
+  "checked in": { bg: k.okBg, fg: k.okFg, icon: "checkmark-circle-outline", label: "Present" },
+  "checked out": { bg: k.mutedBg, fg: k.mutedFg, icon: "exit-outline", label: "Checked out" },
+  "early checkout": { bg: k.warnBg, fg: k.warnFg, icon: "time-outline", label: "Early checkout" },
+  "missing checkout": { bg: k.dangerBg, fg: k.dangerFg, icon: "warning-outline", label: "Missing checkout" },
+  absent: { bg: k.absentBg, fg: k.absentFg, icon: "remove-circle-outline", label: "Absent" }
 };
 
 function absenceLabel(value: AbsenceType) {
@@ -435,11 +456,10 @@ export default function Kiosk() {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.keyboard}>
       <View style={[styles.header, { width: contentWidth, marginTop: Math.max(8, insets.top ? 4 : 14), flexDirection: isCompact ? "column" : "row", alignItems: isCompact ? "stretch" : "center" }]}>
         <View style={styles.headerCopy}>
-          <Text style={styles.eyebrow}>Barbaari Attendance</Text>
-          <Text style={[styles.heading, { fontSize: isCompact ? 30 : 38 }]}>Tablet / Kiosk Mode</Text>
-          <Text style={styles.detail}>{modeLabel}</Text>
+          <Text style={styles.eyebrow}>Barbaari attendance · {modeLabel}</Text>
+          <Text style={[styles.heading, { fontSize: isCompact ? 28 : 34 }]}>Tablet mode</Text>
         </View>
-        <TouchableOpacity style={styles.startOver} onPress={unlocked ? lockTablet : startOver}><Ionicons name="refresh" size={18} color={colors.primary} /><Text style={styles.startOverText}>{unlocked ? "Lock tablet" : "Start over"}</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.startOver} onPress={unlocked ? lockTablet : startOver}><Ionicons name={unlocked ? "lock-closed-outline" : "refresh"} size={22} color={k.text} /><Text style={styles.startOverText}>{unlocked ? "Lock tablet" : "Start over"}</Text></TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={[styles.content, { width: contentWidth, paddingBottom: Math.max(34, insets.bottom + 28) }]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         {message ? <Text style={styles.warning}>{message}</Text> : null}
@@ -456,12 +476,12 @@ export default function Kiosk() {
 
                 <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder={emailPlaceholder} autoCapitalize="none" keyboardType="email-address" />
                 <TextInput style={styles.input} value={pin} onChangeText={setPin} placeholder={credentialPlaceholder} secureTextEntry />
-                <Button disabled={saving} onPress={unlockWithPin}>{saving ? "Unlocking..." : unlockButton}</Button>
+                <KButton disabled={saving} onPress={unlockWithPin}>{saving ? "Unlocking..." : unlockButton}</KButton>
               </View>
             ) : (
               <View style={styles.unlock}>
                 <Text style={styles.unlockedText}>{modeLabel} unlocked by: {unlockedUser?.name ?? user?.name ?? "User"}</Text>
-                <Button disabled={saving} onPress={() => loadTabletData(mode)}>{saving ? "Loading tablet..." : (data?.uses_classrooms === false || data?.facility_type === "family_child_care" ? "Continue to children" : "Continue to classrooms")}</Button>
+                <KButton disabled={saving} onPress={() => loadTabletData(mode)}>{saving ? "Loading tablet..." : (data?.uses_classrooms === false || data?.facility_type === "family_child_care" ? "Continue to children" : "Continue to classrooms")}</KButton>
               </View>
             )}
           </View>
@@ -480,7 +500,7 @@ export default function Kiosk() {
               <Tile active={!selectedClassroomId} title="All classrooms" detail={`${data.children.length} visible children`} onPress={() => setSelectedClassroomId("")} />
               {data.classrooms.map((room) => <Tile key={room.id} active={selectedClassroomId === String(room.id)} title={room.name} detail={`${room.children_count ?? data.children.filter((child) => String(child.classroomId) === String(room.id) || child.classroom === room.name).length} children`} onPress={() => setSelectedClassroomId(String(room.id))} />)}
             </View>
-            <Button onPress={() => { setClassroomScopeChosen(true); setStep("child"); }}>Continue</Button>
+            <KButton onPress={() => { setClassroomScopeChosen(true); setStep("child"); }}>Continue</KButton>
           </View>
         ) : null}
 
@@ -493,7 +513,7 @@ export default function Kiosk() {
                 <Text style={styles.detail}>{child.childCode ?? child.child_code ?? "No child code"} - {(data?.facility_type === "family_child_care" || data?.facilityType === "family_child_care") ? "Family child care" : (child.classroom ?? "Unassigned")}</Text>
                 <Text style={styles.detail}>{child.age ?? child.dateOfBirth ?? child.date_of_birth ?? "Age not listed"}</Text>
                 <Text style={styles.detail}>{child.guardianNames?.join(", ") || "Guardians not listed"}</Text>
-                <Badge tone={statusFor(child, data.attendance, data.absences, data.localDate ?? "") === "checked in" ? "success" : "neutral"}>{statusFor(child, data.attendance, data.absences, data.localDate ?? "")}</Badge>
+                <StatusPill status={statusFor(child, data.attendance, data.absences, data.localDate ?? "")} />
               </TouchableOpacity>)}
             </View>
           </View>
@@ -501,7 +521,7 @@ export default function Kiosk() {
 
         {step === "action" ? (
           <StepPanel title="Choose action">
-            <Text style={styles.detail}>{selectedChild?.name} - {selectedChildStatus ?? "status unknown"}</Text>
+            <View style={styles.statusRow}><Text style={styles.childName}>{selectedChild?.name}</Text>{selectedChildStatus ? <StatusPill status={selectedChildStatus} /> : <Text style={styles.detail}>status unknown</Text>}</View>
             {visibleActions.length === 0 ? (
               <>
                 <Text style={styles.warning}>
@@ -509,7 +529,7 @@ export default function Kiosk() {
                     ? "This child was already marked absent today."
                     : "This child's attendance for today is already resolved. No further tablet action is available."}
                 </Text>
-                <Button variant="outline" onPress={startOver}>Back to children</Button>
+                <KButton variant="outline" onPress={startOver}>Back to children</KButton>
               </>
             ) : (
               <>
@@ -522,8 +542,8 @@ export default function Kiosk() {
                       so it's the one place a "change child" back action belongs. Reuses
                       startOver(), the same reset already used by the "already resolved"
                       branch above, rather than a second navigation path. */}
-                  <Button variant="outline" onPress={startOver}>Back to children</Button>
-                  <Button onPress={() => setStep("signer")}>Continue</Button>
+                  <KButton variant="outline" onPress={startOver}>Back to children</KButton>
+                  <KButton onPress={() => setStep("signer")}>Continue</KButton>
                 </View>
               </>
             )}
@@ -535,7 +555,7 @@ export default function Kiosk() {
             <View style={styles.grid}>
               {signers.map((signer) => <Tile key={`${signer.type}:${signer.id}`} active={selectedSignerKey === `${signer.type}:${signer.id}`} title={signer.name} detail={`${signer.relationship ?? signer.type} - ${signer.pin_configured ? "PIN configured" : "PIN missing"}`} onPress={() => chooseSigner(`${signer.type}:${signer.id}`)} blocked={!signer.can_pickup} />)}
             </View>
-            <Button onPress={() => selectedSignerKey ? setStep("verify") : Alert.alert("Choose signer", "Select an authorized signer first.")}>Continue</Button>
+            <KButton onPress={() => selectedSignerKey ? setStep("verify") : Alert.alert("Choose signer", "Select an authorized signer first.")}>Continue</KButton>
           </StepPanel>
         ) : null}
 
@@ -549,7 +569,7 @@ export default function Kiosk() {
               <TextInput style={styles.input} value={absenceReason} onChangeText={setAbsenceReason} placeholder="Reason, e.g. parent reported child is sick" />
               <TextInput style={[styles.input, styles.notesInput]} value={absenceNotes} onChangeText={setAbsenceNotes} placeholder="Optional notes" multiline />
             </View> : null}
-            <Button disabled={saving} onPress={verifySelectedSignerPin}>{saving ? "Verifying..." : "Verify PIN and continue"}</Button>
+            <KButton disabled={saving} onPress={verifySelectedSignerPin}>{saving ? "Verifying..." : "Verify PIN and continue"}</KButton>
           </StepPanel>
         ) : null}
 
@@ -562,28 +582,53 @@ export default function Kiosk() {
               {!points.length ? <Text style={styles.signatureHint}>Draw signature here</Text> : null}
             </View>
             <View style={styles.actions}>
-              <Button variant="outline" onPress={() => setPoints([])}>Clear signature</Button>
-              <Button disabled={saving} onPress={submitAttendance}>{saving ? "Saving..." : "Submit"}</Button>
+              <KButton variant="outline" onPress={() => setPoints([])}>Clear signature</KButton>
+              <KButton disabled={saving} onPress={submitAttendance}>{saving ? "Saving..." : "Submit"}</KButton>
             </View>
           </StepPanel>
         ) : null}
 
         {step === "confirm" && confirmation ? (
-          <View style={styles.panel}>
-            <Ionicons name="checkmark-circle" size={64} color={colors.success} />
-            <Text style={[styles.stepTitle, { fontSize: isCompact ? 28 : 34 }]}>Attendance saved</Text>
-            <Text style={styles.confirmLine}>{confirmation.child}</Text>
-            <Text style={styles.detail}>{confirmation.action} at {confirmation.time}</Text>
-            <Text style={styles.detail}>Actor: {confirmation.actor}</Text>
-            <Text style={styles.detail}>Signer: {confirmation.signer}</Text>
-            {confirmation.absenceType ? <Text style={styles.detail}>Absence type: {confirmation.absenceType}</Text> : null}
-            <Text style={styles.detail}>Verification: {String(confirmation.verification).replace("_", " ")}</Text>
-            <Button onPress={startOver}>Start another attendance action</Button>
+          <View style={[styles.panel, styles.donePanel]}>
+            <View style={styles.doneCheck}><Ionicons name="checkmark" size={72} color={k.brand} /></View>
+            <Text style={[styles.doneTitle, { fontSize: isCompact ? 34 : 48 }]}>Attendance saved</Text>
+            <Text style={styles.doneLead}>{confirmation.child}</Text>
+            <Text style={styles.doneDetail}>{confirmation.action} at {confirmation.time}</Text>
+            <Text style={styles.doneDetail}>Actor: {confirmation.actor}</Text>
+            <Text style={styles.doneDetail}>Signer: {confirmation.signer}</Text>
+            {confirmation.absenceType ? <Text style={styles.doneDetail}>Absence type: {confirmation.absenceType}</Text> : null}
+            <Text style={styles.doneDetail}>Verification: {String(confirmation.verification).replace("_", " ")}</Text>
+            <KButton variant="light" onPress={startOver}>Start another attendance action</KButton>
           </View>
         ) : null}
       </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+function KButton({ children, onPress, disabled, variant = "primary" }: { children: React.ReactNode; onPress?: () => void; disabled?: boolean; variant?: "primary" | "secondary" | "outline" | "light" }) {
+  const secondary = variant === "secondary" || variant === "outline";
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [styles.button, secondary ? styles.buttonSecondary : variant === "light" ? styles.buttonLight : styles.buttonPrimary, pressed && !disabled && (secondary ? styles.buttonSecondaryPressed : styles.buttonPrimaryPressed), disabled && styles.buttonDisabled]}
+    >
+      <Text style={[styles.buttonText, secondary && styles.buttonTextSecondary, variant === "light" && styles.buttonTextLight]}>{children}</Text>
+    </Pressable>
+  );
+}
+
+function StatusPill({ status }: { status: ChildStatus }) {
+  const spec = statusStyle[status];
+  return (
+    <View style={[styles.pill, { backgroundColor: spec.bg }]} accessibilityLabel={spec.label}>
+      <Ionicons name={spec.icon} size={18} color={spec.fg} />
+      <Text style={[styles.pillText, { color: spec.fg }]}>{spec.label}</Text>
+    </View>
   );
 }
 
@@ -594,7 +639,7 @@ function StepPanel({ title, children }: { title: string; children: React.ReactNo
 function Tile({ title, detail, active, blocked, icon, color, onPress }: { title: string; detail: string; active?: boolean; blocked?: boolean; icon?: keyof typeof Ionicons.glyphMap; color?: string; onPress: () => void }) {
   return (
     <TouchableOpacity style={[styles.tile, active && styles.tileActive, blocked && styles.tileBlocked]} onPress={onPress}>
-      {icon ? <View style={[styles.tileIcon, { backgroundColor: active ? colors.primary : color ?? colors.cardStrong }]}><Ionicons name={icon} size={24} color={active ? colors.white : colors.primary} /></View> : null}
+      {icon ? <View style={[styles.tileIcon, { backgroundColor: active ? k.accent : color ?? k.neutral200 }]}><Ionicons name={icon} size={24} color={active ? k.white : k.accent} /></View> : null}
       {color && !icon ? <View style={[styles.colorBar, { backgroundColor: color }]} /> : null}
       <Text style={styles.tileTitle}>{title}</Text>
       <Text style={styles.detail}>{detail}</Text>
@@ -603,37 +648,55 @@ function Tile({ title, detail, active, blocked, icon, color, onPress }: { title:
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#F3FBFD" },
-  keyboard: { flex: 1, alignItems: "center", backgroundColor: "#F3FBFD" },
-  header: { paddingHorizontal: 22, paddingTop: 20, paddingBottom: 18, borderRadius: 28, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, justifyContent: "space-between", gap: 16, shadowColor: colors.primary, shadowOpacity: 0.12, shadowRadius: 24, shadowOffset: { width: 0, height: 10 } },
-  headerCopy: { minWidth: 0 },
-  eyebrow: { color: colors.primary, fontWeight: "900", textTransform: "uppercase" },
-  heading: { color: "#0E2A33", fontSize: 38, fontWeight: "900" },
-  startOver: { minHeight: 48, paddingHorizontal: 16, borderRadius: 999, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, flexDirection: "row", alignItems: "center", justifyContent: "center", alignSelf: "flex-start", gap: 8 },
-  startOverText: { color: colors.primary, fontWeight: "900" },
-  content: { gap: 18, paddingTop: 18, paddingBottom: 32 },
-  panel: { gap: 20, padding: 22, borderRadius: 30, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, shadowColor: colors.primary, shadowOpacity: 0.12, shadowRadius: 24, shadowOffset: { width: 0, height: 12 } },
-  stepTitle: { color: "#0E2A33", fontSize: 34, fontWeight: "900" },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
-  tile: { flexGrow: 1, flexShrink: 1, flexBasis: 230, minWidth: 0, minHeight: 122, justifyContent: "center", gap: 8, padding: 18, borderRadius: 24, backgroundColor: colors.white, borderWidth: 2, borderColor: colors.border, shadowColor: "#0E2A33", shadowOpacity: 0.06, shadowRadius: 14, shadowOffset: { width: 0, height: 8 } },
-  tileActive: { borderColor: colors.primary, backgroundColor: "#E9F7F9" },
+  safeArea: { flex: 1, backgroundColor: k.bg },
+  keyboard: { flex: 1, alignItems: "center", backgroundColor: k.bg },
+  header: { paddingHorizontal: 4, paddingTop: 12, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: k.divider, justifyContent: "space-between", gap: 16 },
+  headerCopy: { minWidth: 0, gap: 4 },
+  eyebrow: { color: k.neutral800, fontSize: 16, fontFamily: serif },
+  heading: { color: k.text, fontSize: 34, fontWeight: "600", fontFamily: serif },
+  startOver: { minHeight: 56, paddingHorizontal: 20, borderRadius: 2, backgroundColor: "transparent", borderWidth: 1, borderColor: k.divider, flexDirection: "row", alignItems: "center", justifyContent: "center", alignSelf: "flex-start", gap: 10 },
+  startOverText: { color: k.text, fontSize: 17, fontWeight: "600", fontFamily: serif },
+  content: { gap: 18, paddingTop: 24, paddingBottom: 32 },
+  panel: { gap: 22, paddingVertical: 8 },
+  stepTitle: { color: k.text, fontSize: 34, fontWeight: "600", fontFamily: serif },
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 16 },
+  tile: { flexGrow: 1, flexShrink: 1, flexBasis: 230, minWidth: 0, minHeight: 120, justifyContent: "center", gap: 8, padding: 20, borderRadius: 4, backgroundColor: k.surface, borderWidth: 2, borderColor: "transparent" },
+  tileActive: { borderColor: k.accent, backgroundColor: k.accent100 },
   tileBlocked: { opacity: 0.55 },
-  tileIcon: { width: 48, height: 48, borderRadius: 16, alignItems: "center", justifyContent: "center", marginBottom: 4 },
-  colorBar: { width: 42, height: 7, borderRadius: 999, marginBottom: 4 },
-  tileTitle: { color: "#0E2A33", fontSize: 20, fontWeight: "900", flexShrink: 1 },
-  detail: { color: colors.muted, fontSize: 15, lineHeight: 22 },
-  unlock: { gap: 14 },
-  input: { minHeight: 58, paddingHorizontal: 16, borderRadius: 18, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, color: colors.text, fontSize: 18, fontWeight: "800" },
-  notesInput: { minHeight: 104, paddingTop: 16, textAlignVertical: "top" },
-  warning: { padding: 14, borderRadius: 18, backgroundColor: "#FFF4CA", color: "#9A6A09", fontWeight: "900" },
-  unlockedText: { padding: 14, borderRadius: 18, backgroundColor: "#DCF6EB", color: colors.success, fontSize: 18, fontWeight: "900" },
-  childGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
-  childCard: { flexGrow: 1, flexShrink: 1, flexBasis: 280, minWidth: 0, minHeight: 190, gap: 8, padding: 20, borderRadius: 24, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, shadowColor: "#0E2A33", shadowOpacity: 0.06, shadowRadius: 14, shadowOffset: { width: 0, height: 8 } },
-  childName: { color: "#0E2A33", fontSize: 23, fontWeight: "900" },
-  absenceBox: { gap: 14, padding: 16, borderRadius: 22, backgroundColor: "#FFF9DD", borderWidth: 1, borderColor: "#F4DF8B" },
-  signatureBox: { height: 300, borderRadius: 24, borderWidth: 2, borderStyle: "dashed", borderColor: colors.primary, backgroundColor: colors.white, overflow: "hidden" },
-  signatureDot: { position: "absolute", width: 7, height: 7, borderRadius: 4, backgroundColor: colors.text },
-  signatureHint: { position: "absolute", alignSelf: "center", top: 120, color: colors.muted, fontSize: 20, fontWeight: "900" },
+  tileIcon: { width: 48, height: 48, borderRadius: 4, alignItems: "center", justifyContent: "center", marginBottom: 4 },
+  colorBar: { width: 42, height: 5, borderRadius: 2, marginBottom: 4 },
+  tileTitle: { color: k.text, fontSize: 21, fontWeight: "600", flexShrink: 1, fontFamily: serif },
+  detail: { color: k.neutral800, fontSize: 17, lineHeight: 25, fontFamily: serif },
+  unlock: { gap: 16, maxWidth: 560 },
+  input: { minHeight: 64, paddingHorizontal: 18, borderRadius: 2, backgroundColor: k.white, borderWidth: 1, borderColor: k.divider, color: k.text, fontSize: 20, fontFamily: serif },
+  notesInput: { minHeight: 110, paddingTop: 16, textAlignVertical: "top" },
+  warning: { padding: 16, borderRadius: 4, backgroundColor: k.warnBg, color: k.warnFg, fontSize: 16, lineHeight: 23, fontFamily: serif },
+  unlockedText: { padding: 16, borderRadius: 4, backgroundColor: k.okBg, color: k.okFg, fontSize: 18, fontFamily: serif },
+  childGrid: { flexDirection: "row", flexWrap: "wrap", gap: 16 },
+  childCard: { flexGrow: 1, flexShrink: 1, flexBasis: 260, minWidth: 0, minHeight: 188, gap: 8, padding: 22, borderRadius: 4, backgroundColor: k.surface, borderWidth: 2, borderColor: "transparent" },
+  childName: { color: k.text, fontSize: 24, fontWeight: "600", fontFamily: serif },
+  statusRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 14 },
+  pill: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 2 },
+  pillText: { fontSize: 15, fontFamily: serif },
+  absenceBox: { gap: 16, padding: 18, borderRadius: 4, backgroundColor: k.surface },
+  signatureBox: { height: 300, borderRadius: 4, borderWidth: 1.5, borderStyle: "dashed", borderColor: "#5FB0B8", backgroundColor: k.white, overflow: "hidden" },
+  signatureDot: { position: "absolute", width: 7, height: 7, borderRadius: 4, backgroundColor: k.text },
+  signatureHint: { position: "absolute", alignSelf: "center", top: 120, color: k.neutral700, fontSize: 20, fontFamily: serif },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 12, justifyContent: "flex-end", alignItems: "center" },
-  confirmLine: { color: "#0E2A33", fontSize: 24, fontWeight: "900" }
+  confirmLine: { color: k.text, fontSize: 24, fontWeight: "600", fontFamily: serif },
+  button: { minHeight: 64, paddingHorizontal: 26, borderRadius: 2, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "transparent" },
+  buttonPrimary: { backgroundColor: k.accent },
+  buttonPrimaryPressed: { backgroundColor: k.accent600 },
+  buttonSecondary: { backgroundColor: "transparent", borderColor: k.divider },
+  buttonSecondaryPressed: { backgroundColor: k.neutral200 },
+  buttonLight: { backgroundColor: k.white },
+  buttonDisabled: { opacity: 0.45 },
+  buttonText: { color: k.white, fontSize: 19, fontWeight: "600", fontFamily: serif },
+  buttonTextSecondary: { color: k.text },
+  buttonTextLight: { color: "#174F55" },
+  donePanel: { alignItems: "center", gap: 14, paddingVertical: 48, paddingHorizontal: 24, borderRadius: 4, backgroundColor: k.brand },
+  doneCheck: { width: 140, height: 140, borderRadius: 70, backgroundColor: k.white, alignItems: "center", justifyContent: "center", marginBottom: 10 },
+  doneTitle: { color: k.white, fontWeight: "600", textAlign: "center", fontFamily: serif },
+  doneLead: { color: k.white, fontSize: 24, textAlign: "center", fontFamily: serif },
+  doneDetail: { color: k.white, opacity: 0.92, fontSize: 17, textAlign: "center", fontFamily: serif }
 });

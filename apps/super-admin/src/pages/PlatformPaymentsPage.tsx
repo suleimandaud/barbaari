@@ -15,7 +15,7 @@ export function PlatformPaymentsPage() {
     URL.revokeObjectURL(url);
   }
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Platform Billing" title="Platform payments" />
     {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : <DataTable rows={data ?? []} columns={[
       { header: "Organization", render: (row: any) => row.organization?.name ?? "Organization" },

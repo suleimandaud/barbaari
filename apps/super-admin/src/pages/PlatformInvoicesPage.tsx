@@ -59,7 +59,7 @@ export function PlatformInvoicesPage() {
     void run(() => superAdminApi.recordPlatformPayment(paying.id, { ...payment, amount: Number(payment.amount) }), "Platform payment recorded.");
   }
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Platform Billing" title="Platform invoices" action={<button className="primary" onClick={() => setCreating(true)}>Create invoice</button>} />
     <Alert message={success} />
     <Alert message={actionError} tone="danger" />

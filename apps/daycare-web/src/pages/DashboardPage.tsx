@@ -1,10 +1,10 @@
 import { Link } from "react-router-dom";
-import { Activity, DoorOpen, FileSignature, TabletSmartphone } from "lucide-react";
-import { absenceApi, attendanceApi, childrenApi, classroomsApi, devicesApi, formatAttendanceTime, mergedAttendance, organizationApi } from "@barbaari/shared";
+import { ArrowRight, Clock, ClockCountdown, DeviceTablet, MinusCircle, PencilSimpleLine, Receipt, SignIn, SignOut, Warning } from "@phosphor-icons/react";
+import type { Icon } from "@phosphor-icons/react";
+import { absenceApi, attendanceApi, childrenApi, classroomsApi, daycarePlatformBillingApi, devicesApi, mergedAttendance, organizationApi } from "@barbaari/shared";
+import { EmptyState, ErrorState, LoadingState, Meter, SectionHead, Stat, clockTime, money, recordTime, shortDate } from "@barbaari/shared/web/ui";
 import { useAsyncData } from "../hooks/useAsyncData";
-import { ErrorState, LoadingState } from "../components/Status";
-import { PageHeader, Panel } from "../components/Page";
-import { childCode } from "../utils/labels";
+import { useShell } from "../hooks/useShell";
 
 function recordStatus(record: any) {
   return record?.status ?? (record?.checkOutTime ? "checked_out" : "checked_in");
@@ -23,11 +23,37 @@ function childClassroomId(child: any, classrooms: any[]) {
   return String(classrooms.find((room) => room.name === child.classroom)?.id ?? "");
 }
 
+function greeting(date = new Date()) {
+  const hour = date.getHours();
+  return hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+}
+
+const activityIcons: Record<string, Icon> = {
+  check_in: SignIn, guardian_check_in: SignIn, check_out: SignOut, guardian_check_out: SignOut,
+  correction: PencilSimpleLine, "absence.created": MinusCircle, "absence.updated": MinusCircle
+};
+
+function activityTitle(log: any) {
+  const child = log.childName ?? "A child";
+  switch (log.action) {
+    case "check_in": case "guardian_check_in": return `${child} checked in`;
+    case "check_out": case "guardian_check_out": return `${child} checked out`;
+    case "correction": return `${child}: attendance corrected`;
+    case "absence.created": return `${child} marked absent`;
+    case "absence.updated": return `${child}: absence updated`;
+    default: return `${child} · ${String(log.action ?? "activity").replace(/[._]/g, " ")}`;
+  }
+}
+
+type AttentionItem = { key: string; icon: Icon; tone: "danger" | "warn"; title: string; detail: string; action: { label: string; to: string; primary?: boolean; secondary?: boolean } };
+
 export function DashboardPage() {
+  const { user, organization: shellOrganization } = useShell();
+  const canSeePlatformBilling = ["daycare_admin", "manager"].includes(user?.role);
   const { data, loading, error, reload } = useAsyncData(async () => {
     const today = todayKey();
     // Only what this page renders: today's records, plus every still-open check-in (the
-    // "missing checkout" tile spans all dates), today's absences, and the latest 6 audit
+    // "missing checkout" item spans all dates), today's absences, and the latest 6 audit
     // events — instead of the organization's entire attendance and audit history.
     const [attendance, absences, children, classrooms, devices, auditLogs, organization] = await Promise.all([
       mergedAttendance([{ date: today }, { open: 1 }]),
@@ -48,10 +74,18 @@ export function DashboardPage() {
       organization: organization.organization
     };
   }, []);
+  // Separate so the role (which arrives with the shell) never re-runs the attendance load.
+  // Admin/manager only — the same call the route guard already makes — and a failure here
+  // must never block the attendance dashboard.
+  const { data: billing } = useAsyncData(
+    async () => (canSeePlatformBilling ? daycarePlatformBillingApi.subscription().catch(() => null) : null),
+    [canSeePlatformBilling]
+  );
 
-  if (loading) return <section className="page"><LoadingState /></section>;
-  if (error || !data) return <section className="page"><ErrorState message={error} onRetry={reload} /></section>;
+  if (loading && !data) return <main className="bb-page"><LoadingState /></main>;
+  if (error || !data) return <main className="bb-page"><ErrorState message={error} onRetry={reload} /></main>;
 
+  const now = new Date();
   const todayAttendance = data.attendance.filter((record: any) => isToday(record.date));
   const todayAbsences = data.absences.filter((record: any) => isToday(record.absenceDate ?? record.absence_date));
   const present = todayAttendance.filter((record: any) => recordStatus(record) === "checked_in" && !record.checkOutTime);
@@ -60,98 +94,161 @@ export function DashboardPage() {
   const missingCheckouts = data.attendance.filter((record: any) => recordStatus(record) === "missing_checkout");
   const arrivedOrAbsentIds = new Set([...todayAttendance.map((record: any) => String(record.childId)), ...todayAbsences.map((record: any) => String(record.childId))]);
   const notArrived = data.children.filter((child: any) => !arrivedOrAbsentIds.has(String(child.id)));
-  const recentActions = [...todayAttendance]
-    .sort((a: any, b: any) => String(b.updatedAt ?? b.checkOutTime ?? b.checkInTime ?? b.id).localeCompare(String(a.updatedAt ?? a.checkOutTime ?? a.checkInTime ?? a.id)))
-    .slice(0, 8);
   const recentAudit = data.auditLogs.slice(0, 6);
-  const activeDevices = data.devices.filter((device: any) => device.status === "active" || device.status === "online");
+  const offlineDevices = data.devices.filter((device: any) => !["active", "online"].includes(String(device.status)));
   const isFamilyChildCare = data.organization?.facility_type === "family_child_care";
+  const expected = data.children.length;
+  const orgName = data.organization?.name ?? shellOrganization?.name ?? "";
+  const firstName = String(user?.name ?? "").split(" ")[0];
+  const unpaidInvoice = billing?.unpaid_invoice;
 
   const classroomSummary = data.classrooms.map((room: any) => {
     const children = data.children.filter((child: any) => childClassroomId(child, data.classrooms) === String(room.id));
     const childIds = new Set(children.map((child: any) => String(child.id)));
     const roomPresent = present.filter((record: any) => childIds.has(String(record.childId))).length;
+    const roomOut = checkedOut.filter((record: any) => childIds.has(String(record.childId))).length;
     const roomAbsent = todayAbsences.filter((record: any) => childIds.has(String(record.childId))).length;
-    return { room, children: children.length, present: roomPresent, absent: roomAbsent, notArrived: Math.max(children.length - roomPresent - roomAbsent, 0) };
+    const roomNotArrived = notArrived.filter((child: any) => childIds.has(String(child.id))).length;
+    return { room, children: children.length, present: roomPresent, out: roomOut, absent: roomAbsent, notArrived: roomNotArrived };
   });
 
-  const metrics = [
-    ["Present today", present.length, "Children currently inside", "primary"],
-    ["Checked out today", checkedOut.length, "Completed pickup records", "secondary"],
-    ["Absent today", todayAbsences.length, "Recorded absences and no-shows", "tertiary"],
-    ["Early checkouts", earlyCheckouts.length, "Children who left before schedule", "warning"],
-    ["Missing checkouts", missingCheckouts.length, "Records needing staff review", "danger"],
-    ["Not checked in yet", notArrived.length, "Expected children without arrival", "neutral"],
-    ["Tablet status", `${activeDevices.length}/${data.devices.length}`, "Active kiosk/tablet devices", "primary"],
-    ["Audit activity", recentAudit.length, "Recent signature or correction events", "secondary"]
+  const attention: AttentionItem[] = [
+    ...missingCheckouts.slice(0, 3).map((record: any) => ({
+      key: `missing-${record.id}`, icon: Warning, tone: "danger" as const,
+      title: `${record.childName} was never checked out`,
+      detail: `Checked in ${shortDate(record.date, { weekday: "long" })}${recordTime(record, "in") ? ` at ${recordTime(record, "in")}` : ""}${isFamilyChildCare ? "" : ` · ${record.classroom}`}`,
+      action: { label: "Resolve", to: "/attendance-operations?tab=missing", secondary: true }
+    })),
+    ...(notArrived.length ? [{
+      key: "not-arrived", icon: Clock, tone: "warn" as const,
+      title: `${notArrived.length} expected ${notArrived.length === 1 ? "child hasn’t" : "children haven’t"} checked in`,
+      detail: notArrived.slice(0, 3).map((child: any) => child.name).join(", ") + (notArrived.length > 3 ? ` and ${notArrived.length - 3} more` : ""),
+      action: { label: "View", to: "/attendance-operations?tab=live", secondary: true }
+    }] : []),
+    ...earlyCheckouts.slice(0, 3).map((record: any) => ({
+      key: `early-${record.id}`, icon: ClockCountdown, tone: "warn" as const,
+      title: `${record.childName} left early`,
+      detail: `${recordTime(record, "out")}${record.signedBy ? ` · signed by ${record.signedBy}` : ""}`,
+      action: { label: "Review", to: "/attendance-operations?tab=early" }
+    })),
+    ...(offlineDevices.length ? [{
+      key: "devices", icon: DeviceTablet, tone: "warn" as const,
+      title: `${offlineDevices.length} of ${data.devices.length} tablets ${offlineDevices.length === 1 ? "is" : "are"} offline`,
+      detail: offlineDevices.map((device: any) => device.name).join(", "),
+      action: { label: "Devices", to: "/devices" }
+    }] : []),
+    ...(unpaidInvoice ? [{
+      key: "invoice", icon: Receipt, tone: "danger" as const,
+      title: unpaidInvoice.status === "overdue" ? "1 Barbaari invoice is overdue" : "A Barbaari invoice is due",
+      detail: `${unpaidInvoice.invoice_number} · ${money(unpaidInvoice.balance_due, unpaidInvoice.currency)} · due ${shortDate(unpaidInvoice.due_date)}`,
+      action: { label: "Pay invoice", to: "/subscription-billing", primary: true }
+    }] : [])
   ];
 
+  const bar = [
+    { key: "present", value: present.length, color: "var(--bb-brand)", label: "Present" },
+    { key: "out", value: checkedOut.length, color: "var(--bb-neutral-400)", label: "Checked out" },
+    { key: "absent", value: todayAbsences.length, color: "#93A5B9", label: "Absent" },
+    { key: "notArrived", value: notArrived.length, color: "repeating-linear-gradient(135deg, #B8741C 0 3px, #F0DDB6 3px 6px)", label: "Not arrived" }
+  ];
+  const barTotal = Math.max(1, bar.reduce((sum, part) => sum + part.value, 0));
+
   return (
-    <section className="page">
-      <PageHeader
-        eyebrow="Attendance operations"
-        title="Attendance Dashboard"
-        description={isFamilyChildCare ? "Live check-in, checkout, absence, signature, location, and tablet status for today." : "Live check-in, checkout, absence, classroom, signature, and kiosk status for today."}
-        action={<Link className="primary" to="/attendance"><TabletSmartphone size={18} />Open Tablet / Kiosk Mode</Link>}
-      />
-      <div className="metric-grid attendance-metrics">
-        {metrics.map(([label, value, detail, tone]) => <article className={`metric-card ${tone}`} key={label}><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>)}
+    <main className="bb-page">
+      <header className="bb-page-header">
+        <div>
+          <span className="bb-kicker">{now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}{orgName ? ` · ${orgName}` : ""} · {now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
+          <h1>{firstName ? `${greeting(now)}, ${firstName}` : greeting(now)}</h1>
+        </div>
+        <div className="bb-actions">
+          <Link className="bb-btn bb-btn-secondary bb-btn-lg" to="/attendance-operations?tab=absences&record=1"><MinusCircle />Record absence</Link>
+          {/* <Link className="bb-btn bb-btn-primary bb-btn-lg" to="/attendance-operations?tab=kiosk"><DeviceTablet />Open tablet mode</Link> */}
+        </div>
+      </header>
+
+      <div className="bb-grid-main-side" style={{ marginBottom: 70 }}>
+        <section aria-labelledby="today-attendance">
+          <span id="today-attendance" className="bb-overline accent">Today’s attendance</span>
+          <div className="bb-hero-figure">
+            <strong className="bb-num">{present.length}</strong>
+            <span>{present.length === 1 ? "child is here right now" : "children are here right now"}</span>
+          </div>
+          <div className="bb-stackbar" role="img" aria-label={bar.map((part) => `${part.value} ${part.label.toLowerCase()}`).join(", ")}>
+            {bar.filter((part) => part.value > 0).map((part) => <i key={part.key} style={{ flexGrow: part.value / barTotal, background: part.color }} />)}
+          </div>
+          <p className="bb-caption" style={{ marginTop: 10 }}>{expected} {expected === 1 ? "child" : "children"} expected today</p>
+          <div className="bb-stats" style={{ marginTop: 30, marginBottom: 0, gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+            <Stat value={present.length} label="Present" icon="check" labelTone="ok" />
+            <Stat value={checkedOut.length} label="Checked out" icon="signOut" />
+            <Stat value={todayAbsences.length} label="Absent" icon="minus" />
+            <Stat value={notArrived.length} label="Not arrived" icon="clock" labelTone="warn" />
+          </div>
+        </section>
+
+        <section aria-labelledby="needs-attention">
+          <h2 id="needs-attention" style={{ fontSize: 25, marginBottom: 10 }}>Needs attention</h2>
+          {attention.length ? (
+            <div className="bb-list">
+              {attention.map((item) => (
+                <div className="bb-list-row" key={item.key}>
+                  <item.icon size={24} color={item.tone === "danger" ? "var(--bb-error)" : "var(--bb-warning)"} aria-hidden />
+                  <div className="grow"><strong>{item.title}</strong><span className="sub bb-truncate">{item.detail}</span></div>
+                  <Link className={`bb-btn ${item.action.primary ? "bb-btn-primary" : item.action.secondary ? "bb-btn-secondary" : "bb-btn-ghost"}`} to={item.action.to}>{item.action.label}</Link>
+                </div>
+              ))}
+            </div>
+          ) : <EmptyState compact title="Nothing needs attention">Every expected child is accounted for.</EmptyState>}
+        </section>
       </div>
 
-      <div className="dashboard-grid">
-        <Panel title="Who is currently inside">
-          <div className="alert-list">
-            {present.slice(0, 8).map((record: any) => <div className="alert-item" key={record.id}><DoorOpen size={20} /><strong>{record.childName}</strong><span>{isFamilyChildCare ? "Family child care" : record.classroom} - in at {record.checkInTime ?? "time pending"} - {record.childCode ?? "no code"}</span></div>)}
-            {!present.length ? <div className="alert-item"><strong>No children checked in right now</strong><span>Today has no active inside records yet.</span></div> : null}
-          </div>
-        </Panel>
-
-        <Panel title="Needs attention">
-          <div className="alert-list">
-            {notArrived.slice(0, 5).map((child: any) => <div className="alert-item" key={`not-${child.id}`}><strong>{child.name}</strong><span>Not checked in - {isFamilyChildCare ? "Family child care" : child.classroom ?? "Unassigned"} - {childCode(child)}</span></div>)}
-            {earlyCheckouts.slice(0, 3).map((record: any) => <div className="alert-item" key={`early-${record.id}`}><strong>{record.childName}</strong><span>Early checkout at {record.checkOutTime ?? "time pending"}</span></div>)}
-            {missingCheckouts.slice(0, 3).map((record: any) => <div className="alert-item danger-row" key={`missing-${record.id}`}><strong>{record.childName}</strong><span>Missing checkout from {record.date}</span></div>)}
-          </div>
-        </Panel>
-      </div>
-
-      <div className="dashboard-grid lower">
+      <div className="bb-grid-3">
         {isFamilyChildCare ? (
-          <Panel title="Child attendance summary">
-            <div className="classroom-grid">
-              <div className="classroom attendance-room"><strong>{data.children.length} enrolled children</strong><span>{present.length} present - {todayAbsences.length} absent - {notArrived.length} not checked in</span><div className="capacity"><i style={{ width: `${data.children.length ? Math.min(100, (present.length / data.children.length) * 100) : 0}%` }} /></div></div>
+          <section>
+            <SectionHead as="h3" title="Children" />
+            <div className="bb-dash-room">
+              <div className="bb-row" style={{ justifyContent: "space-between" }}><strong>{expected} enrolled</strong><span className="bb-num">{present.length} of {expected}</span></div>
+              <Meter value={present.length} max={expected} />
+              <span className="bb-caption">{todayAbsences.length} absent · {notArrived.length} not arrived</span>
             </div>
-          </Panel>
+          </section>
         ) : (
-          <Panel title="Classroom attendance summary">
-            <div className="classroom-grid">
-              {classroomSummary.map(({ room, children, present, absent, notArrived }: any) => <div className="classroom attendance-room" key={room.id}><strong>{room.name}</strong><span>{present} present - {absent} absent - {notArrived} not checked in</span><div className="capacity"><i style={{ width: `${children ? Math.min(100, (present / children) * 100) : 0}%` }} /></div></div>)}
-            </div>
-          </Panel>
+          <section>
+            <SectionHead as="h3" title="Classrooms" />
+            {classroomSummary.length ? classroomSummary.map(({ room, children, present: roomPresent, out, absent, notArrived: roomNotArrived }: any) => (
+              <div className="bb-dash-room" key={room.id}>
+                <div className="bb-row" style={{ justifyContent: "space-between" }}><strong>{room.name}</strong><span className="bb-num">{roomPresent} of {children}</span></div>
+                <Meter value={roomPresent} max={children} label={`${roomPresent} of ${children} present`} />
+                <span className="bb-caption">{[absent ? `${absent} absent` : "", roomNotArrived ? `${roomNotArrived} not arrived` : "", out ? `${out} checked out` : ""].filter(Boolean).join(" · ") || "Everyone accounted for"}</span>
+              </div>
+            )) : <p className="bb-muted">No classrooms yet.</p>}
+          </section>
         )}
 
-        <Panel title="Recent attendance actions">
-          <div className="alert-list">
-            {recentActions.map((record: any) => <div className="alert-item" key={record.id}><Activity size={20} /><strong>{record.childName}</strong><span>{recordStatus(record).replace(/_/g, " ")} - in {record.checkInTime ?? "pending"} - out {record.checkOutTime ?? "pending"}</span></div>)}
-          </div>
-        </Panel>
-      </div>
+        <section>
+          <SectionHead as="h3" title="Recent activity" />
+          {recentAudit.length ? recentAudit.map((log: any) => {
+            const Glyph = activityIcons[log.action] ?? PencilSimpleLine;
+            return (
+              <div className="bb-activity" key={log.id}>
+                <time className="bb-num">{clockTime(log.editedAtLocal ?? log.edited_at, log.timezone)}</time>
+                <Glyph size={20} color="var(--bb-accent)" aria-hidden />
+                <div><strong>{activityTitle(log)}</strong><span>{[log.editedBy ? `by ${log.editedBy}` : "", log.action === "correction" ? log.reason : ""].filter(Boolean).join(" · ")}</span></div>
+              </div>
+            );
+          }) : <p className="bb-muted">No attendance activity yet today.</p>}
+        </section>
 
-      <div className="dashboard-grid lower">
-        <Panel title="Recent absences">
-          <div className="alert-list">
-            {todayAbsences.slice(0, 6).map((record: any) => <div className="alert-item" key={record.id}><strong>{record.childName}</strong><span>{(record.absenceType ?? record.absence_type ?? "absence").replace(/_/g, " ")} - {record.reason ?? "No reason entered"}</span></div>)}
-            {!todayAbsences.length ? <div className="alert-item"><strong>No absences recorded today</strong><span>Absence records will appear here after staff entry.</span></div> : null}
-          </div>
-        </Panel>
-
-        <Panel title="Signature and audit activity">
-          <div className="alert-list">
-            {recentAudit.map((log: any) => <div className="alert-item" key={log.id}><FileSignature size={20} /><strong>{log.childName ?? log.action}</strong><span>{log.action} - {log.reason ?? "Attendance activity"} - {log.editedAtLocal ? formatAttendanceTime(log.editedAtLocal, log.timezone) : "time pending"}</span></div>)}
-            {!recentAudit.length ? <div className="alert-item"><strong>No audit events yet</strong><span>Corrections and signature activity will appear here.</span></div> : null}
-          </div>
-        </Panel>
+        <section>
+          <SectionHead as="h3" title="Absent today" />
+          {todayAbsences.length ? todayAbsences.slice(0, 5).map((record: any) => (
+            <div className="bb-absent" key={record.id}>
+              <strong>{record.childName}</strong>
+              <span>{[String(record.absenceType ?? record.absence_type ?? "absence").replace(/_/g, " ").replace(/^\w/, (letter: string) => letter.toUpperCase()), record.reason ? `“${record.reason}”` : "no reason entered", isFamilyChildCare ? "" : record.classroom].filter(Boolean).join(" · ")}</span>
+            </div>
+          )) : <p className="bb-muted">No absences recorded today.</p>}
+          <Link className="bb-btn bb-btn-ghost" style={{ marginTop: 10, paddingInline: 5 }} to="/attendance-operations?tab=absences">All absences<ArrowRight size={16} /></Link>
+        </section>
       </div>
-    </section>
+    </main>
   );
 }

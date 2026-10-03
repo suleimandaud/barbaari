@@ -22,10 +22,10 @@ export function MonitoringPage() {
     }
   }
 
-  if (loading) return <section className="page"><LoadingState /></section>;
-  if (error || !data) return <section className="page"><ErrorState message={error} onRetry={reload} /></section>;
+  if (loading) return <section className="bb-page"><LoadingState /></section>;
+  if (error || !data) return <section className="bb-page"><ErrorState message={error} onRetry={reload} /></section>;
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Operations" title="Monitoring health" action={<div className="actions"><button className="secondary" onClick={reload}>Refresh health check</button><button className="primary" onClick={createAlert}>Create system alert</button></div>} />
     <Alert tone="warning" message="Demo placeholder: API and database health are checked locally. Queue, scheduler, Stripe, SMS, and email provider checks are not connected to production monitoring yet." />
     <Alert message={success} />

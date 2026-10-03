@@ -1,26 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { absenceApi, attendanceApi, authApi, childrenApi, classroomsApi, formatAttendanceTime, getApiError, mergedAttendance, organizationApi } from "@barbaari/shared";
-import { PageHeader, Panel } from "../components/Page";
+import { ArrowLeft, CalendarBlank, CaretLeft, CaretRight, Check, CheckSquare, DeviceTablet, Eraser, Export, IdentificationBadge, Info, LockSimple, MinusCircle, SignIn, SignOut } from "@phosphor-icons/react";
+import { absenceApi, attendanceApi, authApi, childrenApi, classroomsApi, getApiError, mergedAttendance, organizationApi } from "@barbaari/shared";
+import {
+  Alert, Avatar, Dialog, Drawer, EmptyState, LogoTile, ErrorState, Field, LoadingState, OfflineBanner, PageHeader, PinPad, SearchInput, Segmented, Stat, Status, StatusBadge,
+  Tabs, clockTime, recordTime, shortDate, useToast
+} from "@barbaari/shared/web/ui";
+import { accountStatuses, attendanceStatuses, resolveStatus, type StatusSpec } from "@barbaari/shared/web/status";
 import { DataTable } from "../components/DataTable";
-import { Badge, ErrorState, LoadingState } from "../components/Status";
-import { ErrorAlert, SuccessAlert } from "../components/Alerts";
 import { ChildSelect, ClassroomSelect } from "../components/Selects";
-import { Modal } from "../components/Modal";
 import { useAsyncData } from "../hooks/useAsyncData";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
-import { childLabel, friendlyError } from "../utils/labels";
+import { friendlyError } from "../utils/labels";
 
-const attendanceTabs = [
-  ["live", "Live Status"],
-  ["kiosk", "Kiosk / Tablet"],
-  ["records", "Records"],
-  ["absences", "Absences"],
-  ["early", "Early Checkouts"],
-  ["missing", "Missing Checkouts"],
-  ["corrections", "Corrections"]
-] as const;
+type TabKey = "live" | "absences" | "early" | "missing" | "corrections";
 
 const absenceTypes = [
   ["excused", "Excused"],
@@ -31,15 +25,10 @@ const absenceTypes = [
   ["other", "Other"]
 ] as const;
 
-function initialTab(value: string | null) {
-  if (value === "checked_in" || value === "checked_out") return "records";
-  if (value && attendanceTabs.some(([id]) => id === value)) return value;
-  return "live";
-}
-
-function initialRecordTab(value: string | null) {
+/** Old tab/view names (and the sidebar's ?tab=kiosk) keep working. */
+function initialTab(value: string | null): TabKey {
   if (value === "absences" || value === "early" || value === "missing" || value === "corrections") return value;
-  return "all";
+  return "live";
 }
 
 function absenceLabel(value: string) {
@@ -70,17 +59,45 @@ function browserLocation(): Promise<{ latitude: number; longitude: number }> {
   });
 }
 
+/** Minutes after midnight in the organization's timezone, for the day timeline. */
+function minutesInZone(iso?: string | null, timeZone?: string) {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: timeZone || undefined }).formatToParts(date);
+    const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+    const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+    return (hour % 24) * 60 + minute;
+  } catch {
+    return date.getHours() * 60 + date.getMinutes();
+  }
+}
+
+const DAY_START = 7 * 60;
+const DAY_SPAN = 11 * 60;
+const toPercent = (minutes: number) => `${Math.max(0, Math.min(100, ((minutes - DAY_START) / DAY_SPAN) * 100)).toFixed(2)}%`;
+
+function shiftDate(value: string, days: number) {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+type RosterRow = { child: any; record?: any; absence?: any; statusKey: string; spec: StatusSpec; sub: string };
+
 export function AttendancePage() {
   const isOnline = useOnlineStatus();
+  const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const today = new Date().toISOString().slice(0, 10);
   const [filterDate, setFilterDate] = useState(today);
   const { data, loading, error, reload } = useAsyncData(async () => {
-    // Every view on this page is keyed to either the date filter or today (live stats), so
-    // only those dates are requested — clearing the date filter still loads full history.
+    // Every view on this page is keyed to either the selected date or today. Open check-ins are
+    // added so missing checkouts from earlier days are visible on the Missing checkouts tab.
     const dates = filterDate ? [...new Set([filterDate, today])] : [];
     const [attendance, absenceLists, children, classrooms, organization] = await Promise.all([
-      dates.length ? mergedAttendance(dates.map((date) => ({ date }))) : attendanceApi.managerList().then((result) => result.attendance),
+      dates.length ? mergedAttendance([...dates.map((date) => ({ date })), { open: 1 as const }]) : attendanceApi.managerList().then((result) => result.attendance),
       Promise.all(dates.length ? dates.map((date) => absenceApi.list({ date })) : [absenceApi.list()]),
       childrenApi.managerList(),
       classroomsApi.list(),
@@ -93,16 +110,16 @@ export function AttendancePage() {
   const [actionDate, setActionDate] = useState(today);
   const [actionClassroomId, setActionClassroomId] = useState("");
   const [actionChildId, setActionChildId] = useState("");
-  const [filterClassroomId, setFilterClassroomId] = useState("");
-  const [filterChildId, setFilterChildId] = useState("");
-  const [status, setStatus] = useState("");
+  const [roomFilter, setRoomFilter] = useState("all");
+  const [childSearch, setChildSearch] = useState("");
   const [absenceType, setAbsenceType] = useState("sick");
   const [absenceReason, setAbsenceReason] = useState("");
   const [absenceNotes, setAbsenceNotes] = useState("");
   const [absenceFilterType, setAbsenceFilterType] = useState("");
   const [absenceFilterStatus, setAbsenceFilterStatus] = useState("");
-  const [recordTab, setRecordTab] = useState(initialRecordTab(searchParams.get("tab") ?? searchParams.get("view")));
   const [selectedRecord, setSelectedRecord] = useState<any | null>(null);
+  const [detailsFor, setDetailsFor] = useState<RosterRow | null>(null);
+  const [absenceFormOpen, setAbsenceFormOpen] = useState(searchParams.get("record") === "1");
   const [showAuditFor, setShowAuditFor] = useState<any | null>(null);
   // Audit entries are fetched for the one record being inspected, rather than loading the
   // organization's whole audit history up front on every page load and every action.
@@ -122,9 +139,10 @@ export function AttendancePage() {
   const [signatureName, setSignatureName] = useState("");
   const [signingDirection, setSigningDirection] = useState<"in" | "out">("in");
   const [kioskOpen, setKioskOpen] = useState(false);
-  const [kioskStep, setKioskStep] = useState(1);
+  const [kioskStep, setKioskStep] = useState(2);
   const [kioskClassroomId, setKioskClassroomId] = useState("");
   const [kioskChildId, setKioskChildId] = useState("");
+  const [kioskSearch, setKioskSearch] = useState("");
   const [kioskAction, setKioskAction] = useState<"in" | "out" | "absent">("in");
   const [kioskSignerValue, setKioskSignerValue] = useState("staff:staff");
   const [kioskSigners, setKioskSigners] = useState<any[]>([]);
@@ -136,71 +154,91 @@ export function AttendancePage() {
   const [kioskAbsenceReason, setKioskAbsenceReason] = useState("");
   const [kioskAbsenceNotes, setKioskAbsenceNotes] = useState("");
   const [kioskSuccess, setKioskSuccess] = useState("");
+  const [kioskCountdown, setKioskCountdown] = useState(0);
   const signatureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
   const [newIn, setNewIn] = useState("");
   const [newOut, setNewOut] = useState("");
   const [reason, setReason] = useState("");
-  const [success, setSuccess] = useState("");
   const [actionError, setActionError] = useState("");
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState(initialTab(searchParams.get("tab") ?? searchParams.get("view")));
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab(searchParams.get("tab") ?? searchParams.get("view")));
 
   const childById = useMemo(() => new Map((data?.children ?? []).map((child: any) => [String(child.id), child])), [data?.children]);
-  const classroomByName = useMemo(() => new Map((data?.classrooms ?? []).map((room: any) => [room.name, room])), [data?.classrooms]);
   const isFamilyChildCare = data?.organization?.facility_type === "family_child_care";
+  const orgTimezone = data?.attendance?.[0]?.timezone ?? data?.organization?.attendance_timezone ?? data?.organization?.timezone;
   const actionChildren = useMemo(() => {
     return actionClassroomId ? (data?.children ?? []).filter((child: any) => String(child.classroomId) === actionClassroomId) : data?.children ?? [];
   }, [actionClassroomId, data?.children]);
-  const kioskChildren = useMemo(() => {
-    return kioskClassroomId ? (data?.children ?? []).filter((child: any) => String(child.classroomId) === kioskClassroomId) : data?.children ?? [];
-  }, [data?.children, kioskClassroomId]);
 
-  const filteredRows = useMemo(() => {
-    return (data?.attendance ?? []).filter((record: any) => {
-      const child = childById.get(String(record.childId));
-      const room = classroomByName.get(record.classroom);
-      const rowStatus = record.status ?? (record.checkOutTime ? "checked_out" : "checked_in");
-      const tabMatches = recordTab === "all" || activeTab === "records" || activeTab === "live" || activeTab === "kiosk"
-        || (recordTab === "checked_in" && rowStatus === "checked_in")
-        || (recordTab === "checked_out" && rowStatus === "checked_out")
-        || ((recordTab === "early" || activeTab === "early") && rowStatus === "checked_out_early")
-        || ((recordTab === "missing" || activeTab === "missing") && rowStatus === "missing_checkout")
-        || ((recordTab === "corrections" || activeTab === "corrections") && record.corrected);
-      return (!filterDate || record.date === filterDate)
-        && (!filterClassroomId || String(room?.id) === filterClassroomId)
-        && (!filterChildId || String(record.childId) === filterChildId)
-        && (!status || rowStatus === status)
-        && tabMatches
-        && (!filterChildId || child);
-    });
-  }, [activeTab, data?.attendance, childById, classroomByName, filterDate, filterClassroomId, filterChildId, recordTab, status]);
+  // The sidebar's "Tablet mode" link lands here with ?tab=kiosk and opens the kiosk directly.
+  useEffect(() => {
+    if (searchParams.get("tab") === "kiosk" && data && !kioskOpen) openKioskMode();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, data]);
 
-  const filteredAbsences = useMemo(() => {
-    if (!["all", "absences"].includes(recordTab) && activeTab !== "absences" && activeTab !== "live" && activeTab !== "kiosk") return [];
-    return (data?.absences ?? []).filter((record: any) => {
-      return (!filterDate || record.absenceDate === filterDate || record.absence_date === filterDate)
-        && (!filterClassroomId || String(record.classroomId) === filterClassroomId)
-        && (!filterChildId || String(record.childId) === filterChildId)
-        && (!absenceFilterType || record.absenceType === absenceFilterType || record.absence_type === absenceFilterType)
-        && (!absenceFilterStatus || record.status === absenceFilterStatus);
-    });
-  }, [absenceFilterStatus, absenceFilterType, activeTab, data?.absences, filterChildId, filterClassroomId, filterDate, recordTab]);
+  const dayRecords = useMemo(() => (data?.attendance ?? []).filter((record: any) => !filterDate || record.date === filterDate), [data?.attendance, filterDate]);
+  const dayAbsences = useMemo(() => (data?.absences ?? []).filter((record: any) => (!filterDate || (record.absenceDate ?? record.absence_date) === filterDate) && record.status !== "cancelled"), [data?.absences, filterDate]);
 
-  const liveStats = useMemo(() => {
-    const todayAttendance = (data?.attendance ?? []).filter((record: any) => record.date === today);
-    const todayAbsences = (data?.absences ?? []).filter((record: any) => (record.absenceDate ?? record.absence_date) === today);
-    const checkedIn = todayAttendance.filter((record: any) => (record.status ?? (record.checkOutTime ? "checked_out" : "checked_in")) === "checked_in" && !record.checkOutTime);
-    const checkedOut = todayAttendance.filter((record: any) => record.checkOutTime || (record.status ?? "") === "checked_out");
-    const early = todayAttendance.filter((record: any) => (record.status ?? "") === "checked_out_early");
-    const missing = todayAttendance.filter((record: any) => (record.status ?? "") === "missing_checkout");
-    return { checkedIn, checkedOut, early, missing, absences: todayAbsences };
-  }, [data?.absences, data?.attendance, today]);
+  const roster = useMemo<RosterRow[]>(() => {
+    const recordByChild = new Map(dayRecords.map((record: any) => [String(record.childId), record]));
+    const absenceByChild = new Map(dayAbsences.map((absence: any) => [String(absence.childId), absence]));
+    // A check-in from an earlier day that was never closed still needs resolving today.
+    const openByChild = new Map((data?.attendance ?? []).filter((record: any) => record.status === "missing_checkout").map((record: any) => [String(record.childId), record]));
+    const query = childSearch.trim().toLowerCase();
+    return (data?.children ?? [])
+      .filter((child: any) => roomFilter === "all" || String(child.classroomId) === roomFilter)
+      .filter((child: any) => !query || `${child.name} ${child.childCode ?? ""}`.toLowerCase().includes(query))
+      .map((child: any) => {
+        const absence = absenceByChild.get(String(child.id));
+        const record = recordByChild.get(String(child.id)) ?? (!absence && filterDate === today ? openByChild.get(String(child.id)) : undefined);
+        let statusKey = "not_checked_in";
+        let sub = filterDate === today ? "Not checked in yet" : "No attendance record";
+        if (record) {
+          statusKey = record.status ?? (record.checkOutTime ? "checked_out" : "checked_in");
+          if (statusKey === "checked_in") sub = `In ${recordTime(record, "in")}`;
+          else if (statusKey === "missing_checkout") sub = `Open since ${shortDate(record.date, { weekday: "short" })} ${recordTime(record, "in")}`;
+          else sub = `Out ${recordTime(record, "out")}`;
+        } else if (absence) {
+          statusKey = "absent";
+          sub = absence.reason || absenceLabel(absence.absenceType ?? absence.absence_type ?? "");
+        }
+        return { child, record, absence, statusKey, spec: resolveStatus(attendanceStatuses, statusKey), sub };
+      });
+  }, [data?.children, dayRecords, dayAbsences, roomFilter, childSearch, filterDate, today]);
+
+  const stats = useMemo(() => {
+    const count = (key: string) => roster.filter((row) => row.statusKey === key).length;
+    return {
+      expected: roster.length,
+      checkedIn: roster.filter((row) => row.record?.checkInTime || row.record?.checkInAt).length,
+      present: count("checked_in") + count("missing_checkout"),
+      checkedOut: count("checked_out") + count("checked_out_early"),
+      absent: count("absent"),
+      notArrived: count("not_checked_in")
+    };
+  }, [roster]);
+
+  // The room filter and child search apply to every tab, not only the live roster.
+  const matchesFilters = useMemo(() => {
+    const query = childSearch.trim().toLowerCase();
+    return (row: any) => {
+      const child = childById.get(String(row.childId));
+      const roomOk = roomFilter === "all" || String(child?.classroomId ?? row.classroomId) === roomFilter;
+      const searchOk = !query || `${row.childName ?? ""} ${row.childCode ?? row.child_code ?? ""}`.toLowerCase().includes(query);
+      return roomOk && searchOk;
+    };
+  }, [childById, roomFilter, childSearch]);
+  const earlyRecords = useMemo(() => dayRecords.filter((record: any) => record.status === "checked_out_early").filter(matchesFilters), [dayRecords, matchesFilters]);
+  const missingRecords = useMemo(() => (data?.attendance ?? []).filter((record: any) => record.status === "missing_checkout").filter(matchesFilters), [data?.attendance, matchesFilters]);
+  const correctedRecords = useMemo(() => dayRecords.filter((record: any) => record.corrected).filter(matchesFilters), [dayRecords, matchesFilters]);
+  const filteredAbsences = useMemo(() => (data?.absences ?? []).filter((record: any) => (!filterDate || (record.absenceDate ?? record.absence_date) === filterDate)
+    && (!absenceFilterType || (record.absenceType ?? record.absence_type) === absenceFilterType)
+    && (!absenceFilterStatus || record.status === absenceFilterStatus)).filter(matchesFilters), [data?.absences, filterDate, absenceFilterType, absenceFilterStatus, matchesFilters]);
 
   async function runAction(action: () => Promise<void>, message: string) {
     setSaving(true);
     setActionError("");
-    setSuccess("");
     if (!isOnline) {
       setActionError("You're offline. Please reconnect and try again.");
       setSaving(false);
@@ -208,10 +246,12 @@ export function AttendancePage() {
     }
     try {
       await action();
-      setSuccess(message);
+      toast(message);
       setSelectedRecord(null);
       setShowAuditFor(null);
       setSigningChild(null);
+      setDetailsFor(null);
+      setAbsenceFormOpen(false);
       setReason("");
       setNewIn("");
       setNewOut("");
@@ -226,7 +266,7 @@ export function AttendancePage() {
   }
 
   function markSelectedAbsent() {
-    const child = selectedActionChild();
+    const child = childById.get(String(actionChildId));
     if (!child) {
       setActionError("Please select a child from the list.");
       return;
@@ -240,66 +280,21 @@ export function AttendancePage() {
     }).then(() => undefined), `${child.name} marked absent.`);
   }
 
-  function selectedActionChild() {
-    return childById.get(String(actionChildId));
-  }
-
-  async function checkSelected(direction: "in" | "out") {
-    const child = selectedActionChild();
-    if (!child) {
-      setActionError("Please select a child from the list.");
-      return;
-    }
+  function checkChild(child: any, direction: "in" | "out") {
     const call = direction === "in" ? attendanceApi.checkIn : attendanceApi.checkOut;
-    try {
+    void runAction(async () => {
       const loc = await browserLocation();
-      void runAction(() => call(child.id, "staff", "secure_login", undefined, loc).then(() => undefined), `${child.name} checked ${direction}.`);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Location permission is required for attendance.");
-    }
+      await call(child.id, "staff", "secure_login", undefined, loc);
+    }, `${child.name} checked ${direction}.`);
   }
 
-  function clearFilters() {
-    setFilterDate("");
-    setFilterClassroomId("");
-    setFilterChildId("");
-    setStatus("");
-    setAbsenceFilterType("");
-    setAbsenceFilterStatus("");
-    setRecordTab("all");
-    setActiveTab("records");
-    setSearchParams({});
-  }
-
-  function chooseRecordTab(value: string) {
-    setRecordTab(value);
-    setActiveTab(value === "absences" || value === "early" || value === "missing" || value === "corrections" ? value : "records");
-    setSearchParams(value === "all" ? { tab: "records" } : { tab: value === "all" ? "records" : value });
-    if (value === "checked_in") setStatus("checked_in");
-    else if (value === "checked_out") setStatus("checked_out");
-    else if (value === "early") setStatus("checked_out_early");
-    else if (value === "missing") setStatus("missing_checkout");
-    else setStatus("");
-  }
-
-  function chooseOperationTab(value: string) {
+  function chooseTab(value: TabKey) {
     setActiveTab(value);
-    setSearchParams({ tab: value });
-    if (value === "absences") setRecordTab("absences");
-    else if (value === "early") {
-      setRecordTab("early");
-      setStatus("checked_out_early");
-    } else if (value === "missing") {
-      setRecordTab("missing");
-      setStatus("missing_checkout");
-    } else if (value === "corrections") setRecordTab("corrections");
-    else {
-      setRecordTab("all");
-      if (value !== "records") setStatus("");
-    }
+    setSearchParams(value === "live" ? {} : { tab: value });
   }
 
   function openCorrection(record: any) {
+    setDetailsFor(null);
     setSelectedRecord(record);
     setNewIn(record.checkInTime ?? "");
     setNewOut(record.checkOutTime ?? "");
@@ -307,21 +302,17 @@ export function AttendancePage() {
     setActionError("");
   }
 
-  async function openSigningModal() {
-    const child = selectedActionChild();
-    if (!child) {
-      setActionError("Please select a child from the list.");
-      return;
-    }
+  async function openSigningModal(child: any, direction: "in" | "out" = "in") {
     setSaving(true);
     setActionError("");
     try {
       const response = await childrenApi.pickupSigners(child.id);
       setSigners(response.signers ?? []);
+      setDetailsFor(null);
       setSigningChild(child);
       setSignerValue("");
       setSignatureName("");
-      setSigningDirection("in");
+      setSigningDirection(direction);
     } catch (err) {
       setActionError(friendlyError(getApiError(err).message));
     } finally {
@@ -365,11 +356,12 @@ export function AttendancePage() {
     }, `${signingChild.name} signed ${signingDirection === "in" ? "in" : "out"} by ${signer.name}.`);
   }
 
-  async function openKioskMode() {
+  function openKioskMode() {
     setKioskOpen(true);
-    setKioskStep(isFamilyChildCare ? 2 : 1);
+    setKioskStep(2);
     setKioskClassroomId("");
     setKioskChildId("");
+    setKioskSearch("");
     setKioskAction("in");
     setKioskSignerValue("staff:staff");
     setKioskSigners([]);
@@ -381,7 +373,13 @@ export function AttendancePage() {
     setKioskAbsenceReason("");
     setKioskAbsenceNotes("");
     setKioskSuccess("");
+    setKioskCountdown(0);
     setActionError("");
+  }
+
+  function closeKiosk() {
+    setKioskOpen(false);
+    if (searchParams.get("tab") === "kiosk") setSearchParams({});
   }
 
   async function loadKioskSigners(nextStep = 4) {
@@ -396,7 +394,7 @@ export function AttendancePage() {
       const response = await childrenApi.pickupSigners(child.id);
       setKioskSigners(response.signers ?? []);
       setKioskSignerValue("staff:staff");
-      setKioskSignatureName("");
+      setKioskSignatureName("Staff-assisted");
       setKioskStep(nextStep);
     } catch (err) {
       setActionError(friendlyError(getApiError(err).message));
@@ -405,12 +403,10 @@ export function AttendancePage() {
     }
   }
 
-  function continueFromKioskAction() {
-    if (!selectedKioskChild()) {
-      setActionError("Please select a child from the list.");
-      return;
-    }
-    if (kioskAction === "absent") {
+  function chooseKioskAction(action: "in" | "out" | "absent") {
+    setKioskAction(action);
+    setActionError("");
+    if (action === "absent") {
       setKioskStep(6);
       return;
     }
@@ -445,7 +441,7 @@ export function AttendancePage() {
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.lineWidth = 4;
-        ctx.strokeStyle = "#20343b";
+        ctx.strokeStyle = "#173236";
       }
     }
     return canvas;
@@ -587,239 +583,377 @@ export function AttendancePage() {
     }
   }
 
-  return (
-    <section className="page">
-      <PageHeader eyebrow="Compliance core" title="Attendance Operations" description={isFamilyChildCare ? "Manage child-based check-ins, check-outs, absences, signatures, geofence verification, and attendance records in one workspace." : "Manage live check-ins, tablet/kiosk mode, absences, early checkouts, missing checkouts, and attendance records in one workspace."} action={<button className="primary" onClick={openKioskMode}>Open tablet / kiosk mode</button>} />
-      {!isOnline ? <div className="alert-banner warning">You're offline. Attendance actions require a connection — reconnect before recording check-ins or check-outs.</div> : null}
-      <SuccessAlert message={success} />
-      <ErrorAlert message={actionError} />
+  // Done screen returns to the child list on its own, as in the tablet design (3f).
+  useEffect(() => {
+    if (!kioskOpen || kioskStep !== 7) return;
+    setKioskCountdown(8);
+    const timer = window.setInterval(() => {
+      setKioskCountdown((value) => {
+        if (value <= 1) {
+          window.clearInterval(timer);
+          openKioskMode();
+          return 0;
+        }
+        return value - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kioskOpen, kioskStep]);
 
-      <div className="record-tabs operation-tabs" role="tablist" aria-label="Attendance operations tabs">
-        {attendanceTabs.map(([value, label]) => <button key={value} className={activeTab === value ? "active" : ""} onClick={() => chooseOperationTab(value)}>{label}</button>)}
+  const rooms = (data?.classrooms ?? []) as any[];
+  const nowMinutes = filterDate === today ? minutesInZone(new Date().toISOString(), orgTimezone) : null;
+  const tabs = [
+    { key: "live" as const, label: "Live" },
+    { key: "absences" as const, label: "Absences", count: dayAbsences.length },
+    { key: "early" as const, label: "Early checkouts", count: earlyRecords.length },
+    { key: "missing" as const, label: "Missing checkouts", count: missingRecords.length, alert: missingRecords.length > 0 },
+    { key: "corrections" as const, label: "Corrections", ...(correctedRecords.length ? { count: correctedRecords.length } : {}) }
+  ];
+
+  const recordColumns = [
+    { header: "Child", render: (row: any) => <div className="bb-person"><Avatar name={row.childName} seed={row.childId} /><div><strong>{row.childName}</strong><span>{isFamilyChildCare ? row.childCode : `${row.classroom} · ${row.childCode ?? ""}`}</span></div></div> },
+    { header: "Date", render: (row: any) => shortDate(row.date, { weekday: "short", day: "numeric", month: "short" }) },
+    { header: "In", render: (row: any) => recordTime(row, "in") || "—" },
+    { header: "Out", render: (row: any) => recordTime(row, "out") || "—" },
+    { header: "Status", render: (row: any) => <StatusBadge map={attendanceStatuses} value={row.status} /> },
+    { header: "Signed by", render: (row: any) => <>{row.signedBy}<span className="sub">{String(row.verificationMethod ?? "").replace(/_/g, " ")}{row.hasSignature ? " · signature" : ""}</span></> },
+    { header: "", render: (row: any) => <div className="bb-row" style={{ justifyContent: "flex-end", gap: 5 }}><button className="bb-btn bb-btn-secondary" onClick={() => openCorrection(row)}>{row.status === "missing_checkout" ? "Resolve" : "Correct"}</button><button className="bb-btn bb-btn-ghost" onClick={() => setShowAuditFor(row)}>Audit</button></div> }
+  ];
+
+  return (
+    <main className="bb-page">
+      <PageHeader
+        kicker="Live check-ins, absences and corrections"
+        title="Attendance"
+        // actions={<>
+        //   <button className="bb-btn bb-btn-secondary bb-btn-lg" onClick={() => runAction(async () => { const result = await attendanceApi.export(); toast(result.message ?? "Attendance export requested."); }, "Attendance export requested.")}><Export />Export</button>
+        //   <button className="bb-btn bb-btn-primary bb-btn-lg" onClick={openKioskMode}><DeviceTablet />Tablet mode</button>
+        // </>}
+      />
+      <OfflineBanner online={isOnline} />
+      {actionError && !kioskOpen ? <Alert tone="danger" title="That didn’t work">{actionError}</Alert> : null}
+
+      <Tabs items={tabs} value={activeTab} onChange={chooseTab} label="Attendance views" />
+
+      <div className="bb-toolbar">
+        <div className="bb-date-step">
+          <button className="bb-btn bb-btn-secondary bb-btn-icon" aria-label="Previous day" onClick={() => setFilterDate(shiftDate(filterDate || today, -1))}><CaretLeft size={18} /></button>
+          <label className="bb-btn bb-btn-secondary bb-date-btn">
+            <CalendarBlank />
+            <span>{filterDate ? `${filterDate === today ? "Today, " : ""}${shortDate(filterDate, { weekday: "short", day: "numeric", month: "short" })}` : "All dates"}</span>
+            <input type="date" aria-label="Date" value={filterDate} max={today} onChange={(event) => setFilterDate(event.target.value)} />
+          </label>
+          <button className="bb-btn bb-btn-secondary bb-btn-icon" aria-label="Next day" disabled={!filterDate || filterDate >= today} onClick={() => setFilterDate(shiftDate(filterDate || today, 1))}><CaretRight size={18} /></button>
+        </div>
+        {!isFamilyChildCare && rooms.length ? <Segmented label="Classroom" value={roomFilter} onChange={setRoomFilter} items={[{ key: "all", label: "All rooms" }, ...rooms.map((room) => ({ key: String(room.id), label: String(room.name).replace(/ Room$/, "") }))]} /> : null}
+        <span className="bb-grow" />
+        <SearchInput value={childSearch} onChange={setChildSearch} placeholder="Find a child" />
       </div>
 
-      {activeTab === "live" ? <Panel title="Live Status">
-        <div className="metric-grid attendance-metrics">
-          <div className="metric-card"><span>Currently checked in</span><strong>{liveStats.checkedIn.length}</strong><small>Children inside now</small></div>
-          <div className="metric-card neutral"><span>Checked out today</span><strong>{liveStats.checkedOut.length}</strong><small>Completed pickups</small></div>
-          <div className="metric-card tertiary"><span>Absent today</span><strong>{liveStats.absences.length}</strong><small>Recorded absences</small></div>
-          <div className="metric-card danger"><span>Missing checkout</span><strong>{liveStats.missing.length}</strong><small>Needs correction</small></div>
-          <div className="metric-card secondary"><span>Early checkout</span><strong>{liveStats.early.length}</strong><small>Left before day end</small></div>
-        </div>
-        <div className="dashboard-grid lower">
-          <div className="card-list">
-            <h2>Recent check-ins</h2>
-            {liveStats.checkedIn.slice(0, 6).map((record: any) => <div className="alert-item" key={record.id}><strong>{record.childName}</strong><span>{record.classroom} - {record.checkInTime}</span></div>)}
-            {!liveStats.checkedIn.length ? <div className="alert-item"><strong>No active check-ins</strong><span>Children checked in today appear here.</span></div> : null}
+      {loading && !data ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : null}
+
+      {data && activeTab === "live" ? (
+        <>
+          <div className="bb-stats" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))" }}>
+            <Stat value={stats.expected} label={filterDate === today ? "Expected today" : "Enrolled"} />
+            <Stat value={stats.checkedIn} label="Checked in" />
+            <Stat value={stats.present} label="Present now" icon="check" labelTone="ok" tone="accent" />
+            <Stat value={stats.checkedOut} label="Checked out" icon="signOut" />
+            <Stat value={stats.absent} label="Absent" icon="minus" />
+            <Stat value={stats.notArrived} label="Not arrived" icon="clock" labelTone="warn" />
           </div>
-          <div className="card-list">
-            <h2>Recent check-outs</h2>
-            {liveStats.checkedOut.slice(0, 6).map((record: any) => <div className="alert-item" key={record.id}><strong>{record.childName}</strong><span>{record.classroom} - {record.checkOutTime}</span></div>)}
-            {!liveStats.checkedOut.length ? <div className="alert-item"><strong>No check-outs yet</strong><span>Completed pickups appear here.</span></div> : null}
+          {roster.length ? (
+            <div className="bb-table-wrap">
+              <table className="bb-table bb-roster">
+                <thead><tr><th>Child</th><th>Status</th><th className="bb-timeline-head" aria-label="Time on site"><div>{[["7 AM", 7], ["10", 10], ["1 PM", 13], ["4", 16], ["6 PM", 18]].map(([label, hour]) => <span key={label} style={{ left: toPercent(Number(hour) * 60) }}>{label}</span>)}</div></th><th className="right">Action</th></tr></thead>
+                <tbody>
+                  {roster.map((row) => {
+                    const inMin = minutesInZone(row.record?.checkInLocal ?? row.record?.checkInAt, row.record?.timezone ?? orgTimezone);
+                    const outMin = minutesInZone(row.record?.checkOutLocal ?? row.record?.checkOutAt, row.record?.timezone ?? orgTimezone);
+                    const endMin = outMin ?? nowMinutes;
+                    return (
+                      <tr key={row.child.id}>
+                        <td><button className="bb-person link" style={{ background: "none", border: 0, padding: 0, textAlign: "left" }} onClick={() => setDetailsFor(row)}><Avatar name={row.child.name} seed={row.child.id} /><div><strong>{row.child.name}</strong><span>{isFamilyChildCare ? row.child.childCode : row.child.classroom}</span></div></button></td>
+                        <td><Status spec={row.spec} /><span className="sub" style={{ marginTop: 4 }}>{row.sub}</span></td>
+                        <td className="bb-timeline-cell">
+                          <div className="bb-timeline" aria-hidden>
+                            {inMin !== null && endMin !== null && row.record?.date === filterDate ? <i className={outMin !== null ? "out" : undefined} style={{ left: toPercent(inMin), width: `calc(${toPercent(Math.max(endMin, inMin + 5))} - ${toPercent(inMin)})` }} /> : null}
+                            {nowMinutes !== null ? <b style={{ left: toPercent(nowMinutes) }} /> : null}
+                          </div>
+                        </td>
+                        <td className="right">
+                          {row.statusKey === "checked_in" ? <button className="bb-btn bb-btn-secondary" disabled={saving} onClick={() => checkChild(row.child, "out")}>Check out</button>
+                            : row.statusKey === "not_checked_in" && filterDate === today ? <button className="bb-btn bb-btn-primary" disabled={saving} onClick={() => checkChild(row.child, "in")}>Check in</button>
+                            : row.statusKey === "missing_checkout" ? <button className="bb-btn bb-btn-secondary" onClick={() => openCorrection(row.record)}>Resolve</button>
+                            : <button className="bb-btn bb-btn-ghost" onClick={() => setDetailsFor(row)}>Details</button>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : <EmptyState title={childSearch ? "No children match that search" : "No children enrolled yet"}>{childSearch ? "Try a different name or child code." : "Add children to start recording attendance."}</EmptyState>}
+          <p className="bb-note"><span className="bb-now-key" aria-hidden />{nowMinutes !== null ? `Now, ${clockTime(new Date().toISOString(), orgTimezone)} · ` : ""}showing {roster.length} of {data.children.length} · teal bar = time on site, grey = picked up</p>
+        </>
+      ) : null}
+
+      {data && activeTab === "absences" ? (
+        <section>
+          <div className="bb-toolbar" style={{ marginBottom: 20 }}>
+            <select className="bb-input" aria-label="Absence type" value={absenceFilterType} onChange={(event) => setAbsenceFilterType(event.target.value)}>
+              <option value="">All absence types</option>
+              {absenceTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+            <select className="bb-input" aria-label="Absence status" value={absenceFilterStatus} onChange={(event) => setAbsenceFilterStatus(event.target.value)}>
+              <option value="">All statuses</option>
+              <option value="recorded">Recorded</option>
+              <option value="reviewed">Reviewed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <span className="bb-grow" />
+            <button className="bb-btn bb-btn-primary" onClick={() => { setActionDate(filterDate || today); setAbsenceFormOpen(true); }}><MinusCircle />Record absence</button>
           </div>
-        </div>
-      </Panel> : null}
-
-      {activeTab === "kiosk" ? <Panel title="Kiosk / Tablet">
-        <div className="compliance-strip">
-          <article><strong>Parent / Guardian</strong><span>Linked children only, drawn signature for check-in/out.</span></article>
-          <article><strong>Staff</strong><span>{isFamilyChildCare ? "Provider/staff attendance support for visible children." : "Assigned classroom only with staff PIN unlock."}</span></article>
-          <article><strong>Admin</strong><span>{isFamilyChildCare ? "All children for family child care attendance operations." : "All classrooms and children for full attendance operations."}</span></article>
-        </div>
-        <div className="attendance-buttons"><button className="primary" onClick={openKioskMode}>Open Tablet / Kiosk Mode</button><button className="secondary" onClick={() => location.href = "/devices"}>View device status</button></div>
-      </Panel> : null}
-
-      {["records", "absences", "early", "missing", "corrections"].includes(activeTab) ? <Panel title="Attendance Actions">
-        <div className="form-grid attendance-grid">
-          {!isFamilyChildCare ? <ClassroomSelect classrooms={data?.classrooms ?? []} value={actionClassroomId} onChange={(id) => { setActionClassroomId(id); setActionChildId(""); }} /> : null}
-          <ChildSelect children={actionChildren} value={actionChildId} onChange={setActionChildId} />
-          <label className="field-stack"><span>Date</span><input type="date" value={actionDate} onChange={(event) => setActionDate(event.target.value)} /></label>
-          <div className="attendance-buttons">
-            <button className="primary" disabled={saving || !actionChildId} onClick={() => checkSelected("in")}>Check in selected child</button>
-            <button className="secondary" disabled={saving || !actionChildId} onClick={() => checkSelected("out")}>Check out selected child</button>
-            <button className="secondary" disabled={saving || !actionChildId} onClick={openSigningModal}>Guardian / pickup signing</button>
-          </div>
-        </div>
-      </Panel> : null}
-
-      {activeTab === "absences" ? <Panel title="Absence Tracking">
-        <div className="form-grid attendance-grid">
-          {!isFamilyChildCare ? <ClassroomSelect classrooms={data?.classrooms ?? []} value={actionClassroomId} onChange={(id) => { setActionClassroomId(id); setActionChildId(""); }} label="Classroom" /> : null}
-          <ChildSelect children={actionChildren} value={actionChildId} onChange={setActionChildId} label="Absent child" />
-          <label className="field-stack"><span>Absence date</span><input type="date" value={actionDate} onChange={(event) => setActionDate(event.target.value)} /></label>
-          <label className="field-stack"><span>Absence type</span><select value={absenceType} onChange={(event) => setAbsenceType(event.target.value)}>
-            {absenceTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select></label>
-          <label className="field-stack"><span>Reason</span><input value={absenceReason} onChange={(event) => setAbsenceReason(event.target.value)} placeholder="Parent called in sick, vacation, no-show..." /></label>
-          <label className="field-stack full"><span>Notes</span><textarea value={absenceNotes} onChange={(event) => setAbsenceNotes(event.target.value)} placeholder="Optional internal notes" /></label>
-          <button className="secondary" disabled={saving || !actionChildId || !actionDate} onClick={markSelectedAbsent}>Mark selected child absent</button>
-        </div>
-      </Panel> : null}
-
-      {["records", "absences", "early", "missing", "corrections"].includes(activeTab) ? <Panel title="Filters">
-        <div className="record-tabs" role="tablist" aria-label="Attendance record filters">
-          {[
-            ["all", "All records"],
-            ["checked_in", "Checked in"],
-            ["checked_out", "Checked out"],
-            ["absences", "Absences"],
-            ["early", "Early checkouts"],
-            ["missing", "Missing checkouts"],
-            ["corrections", "Corrections"]
-          ].map(([value, label]) => <button key={value} className={recordTab === value ? "active" : ""} onClick={() => chooseRecordTab(value)}>{label}</button>)}
-        </div>
-        <div className="form-grid attendance-grid">
-          <label className="field-stack"><span>Date filter</span><input type="date" value={filterDate} onChange={(event) => setFilterDate(event.target.value)} /></label>
-          {!isFamilyChildCare ? <ClassroomSelect classrooms={data?.classrooms ?? []} value={filterClassroomId} onChange={setFilterClassroomId} label="Classroom filter" /> : null}
-          <ChildSelect children={data?.children ?? []} value={filterChildId} onChange={setFilterChildId} label="Child search" />
-          <label className="field-stack"><span>Status filter</span><select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="">All statuses</option>
-            <option value="checked_in">Checked in</option>
-            <option value="checked_out">Checked out</option>
-            <option value="checked_out_early">Checked out early</option>
-            <option value="missing_checkout">Missing checkout</option>
-          </select></label>
-          <label className="field-stack"><span>Absence type</span><select value={absenceFilterType} onChange={(event) => setAbsenceFilterType(event.target.value)}>
-            <option value="">All absence types</option>
-            {absenceTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select></label>
-          <label className="field-stack"><span>Absence status</span><select value={absenceFilterStatus} onChange={(event) => setAbsenceFilterStatus(event.target.value)}>
-            <option value="">All absence statuses</option>
-            <option value="recorded">Recorded</option>
-            <option value="reviewed">Reviewed</option>
-            <option value="cancelled">Cancelled</option>
-          </select></label>
-          <button className="secondary" onClick={clearFilters}>Clear filters</button>
-        </div>
-      </Panel> : null}
-
-      {["records", "early", "missing", "corrections"].includes(activeTab) ? <Panel title={activeTab === "early" ? "Early Checkouts" : activeTab === "missing" ? "Missing Checkouts" : activeTab === "corrections" ? "Corrections" : "Attendance Records"}>
-        {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : (
-          <DataTable rows={filteredRows} emptyTitle="No attendance records for this filter." emptyDetail="Select a child above to check in, or clear filters." columns={[
-            { header: "Child", render: (row: any) => {
-              const child = childById.get(String(row.childId));
-              return <><strong>{row.childName}</strong><br /><small>{child ? childLabel(child) : `ID: ${row.childCode ?? "No child code"}`}</small></>;
-            } },
-            { header: "Child code", render: (row: any) => <Badge>{row.childCode ?? row.child_code ?? "Uncoded"}</Badge> },
-            ...(!isFamilyChildCare ? [{ header: "Classroom", render: (row: any) => row.classroom }] : []),
-            { header: "Date", render: (row: any) => row.date },
-            { header: "Check-in", render: (row: any) => row.checkInTime ?? "Not recorded" },
-            { header: "Check-out", render: (row: any) => row.checkOutTime ?? "Pending" },
-            { header: "Status", render: (row: any) => {
-              const value = row.status ?? (row.checkOutTime ? "checked_out" : "checked_in");
-              return <Badge tone={value === "checked_in" ? "success" : value === "checked_out_early" ? "warning" : value === "missing_checkout" ? "danger" : "neutral"}>{row.statusLabel ?? String(value).replace(/_/g, " ")}</Badge>;
-            } },
-            { header: "Signed by", render: (row: any) => row.signedBy },
-            { header: "Verification", render: (row: any) => <><span>{row.verificationMethod?.replace("_", " ")}</span>{row.hasSignature ? <><br /><small>Signature saved</small></> : null}</> },
-            { header: "Actions", render: (row: any) => <div className="row-actions"><button className="action-link" onClick={() => runAction(async () => { const loc = await browserLocation(); await attendanceApi.checkIn(row.childId, "staff", "secure_login", undefined, loc); }, `${row.childName} checked in.`)}>Check in</button><button className="action-link" onClick={() => runAction(async () => { const loc = await browserLocation(); await attendanceApi.checkOut(row.childId, "staff", "secure_login", undefined, loc); }, `${row.childName} checked out.`)}>Check out</button><button className="action-link" onClick={() => openCorrection(row)}>Correct</button><button className="action-link" onClick={() => setShowAuditFor(row)}>View audit</button></div> }
-          ]} />
-        )}
-      </Panel> : null}
-
-      {activeTab === "absences" ? <Panel title="Absence Records">
-        {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : (
-          <DataTable rows={filteredAbsences} emptyTitle="No absence records for this filter." emptyDetail="Select a child above to mark absent, or clear filters." columns={[
-            { header: "Child", render: (row: any) => {
-              const child = childById.get(String(row.childId));
-              return <><strong>{row.childName}</strong><br /><small>{child ? childLabel(child) : `ID: ${row.childCode ?? "No child code"}`}</small></>;
-            } },
-            { header: "Child code", render: (row: any) => <Badge>{row.childCode ?? row.child_code ?? "Uncoded"}</Badge> },
-            ...(!isFamilyChildCare ? [{ header: "Classroom", render: (row: any) => row.classroom }] : []),
-            { header: "Date", render: (row: any) => row.absenceDate ?? row.absence_date },
-            { header: "Type", render: (row: any) => <Badge tone={row.absenceType === "no_show" || row.absence_type === "no_show" ? "warning" : "neutral"}>{absenceLabel(row.absenceType ?? row.absence_type ?? "")}</Badge> },
-            { header: "Reason", render: (row: any) => row.reason ?? "No reason entered" },
-            { header: "Status", render: (row: any) => <Badge tone={row.status === "cancelled" ? "danger" : "primary"}>{row.status}</Badge> },
+          <DataTable rows={filteredAbsences} emptyTitle="No absences for this day" emptyDetail="Recorded absences and no-shows appear here." columns={[
+            { header: "Child", render: (row: any) => <div className="bb-person"><Avatar name={row.childName} seed={row.childId} /><div><strong>{row.childName}</strong><span>{isFamilyChildCare ? row.childCode : row.classroom}</span></div></div> },
+            { header: "Date", render: (row: any) => shortDate(row.absenceDate ?? row.absence_date, { weekday: "short", day: "numeric", month: "short" }) },
+            { header: "Type", render: (row: any) => <span className={`bb-tag${(row.absenceType ?? row.absence_type) === "no_show" ? " accent" : ""}`}>{absenceLabel(row.absenceType ?? row.absence_type ?? "")}</span> },
+            { header: "Reason", render: (row: any) => row.reason ?? <span className="bb-muted">No reason entered</span> },
+            { header: "Status", render: (row: any) => <StatusBadge map={{ ...accountStatuses, recorded: { label: "Recorded", tone: "absent", icon: "minus" }, reviewed: { label: "Reviewed", tone: "ok", icon: "check" } }} value={row.status} /> },
             { header: "Entered by", render: (row: any) => row.enteredBy ?? "Staff" },
-            { header: "Actions", render: (row: any) => <div className="row-actions"><button className="action-link" disabled={row.status === "cancelled"} onClick={() => runAction(() => absenceApi.update(row.id, { status: "reviewed" }).then(() => undefined), "Absence reviewed.")}>Review</button><button className="action-link" disabled={row.status === "cancelled"} onClick={() => runAction(() => absenceApi.cancel(row.id).then(() => undefined), "Absence cancelled.")}>Cancel</button></div> }
+            { header: "", render: (row: any) => <div className="bb-row" style={{ justifyContent: "flex-end", gap: 5, flexWrap: "nowrap" }}><button className="bb-btn bb-btn-secondary" disabled={row.status === "cancelled" || row.status === "reviewed"} onClick={() => runAction(() => absenceApi.update(row.id, { status: "reviewed" }).then(() => undefined), "Absence reviewed.")}>Review</button><button className="bb-btn bb-btn-ghost" disabled={row.status === "cancelled"} onClick={() => runAction(() => absenceApi.cancel(row.id).then(() => undefined), "Absence cancelled.")}>Cancel</button></div> }
           ]} />
-        )}
-      </Panel> : null}
+        </section>
+      ) : null}
+
+      {absenceFormOpen && data ? (
+        <Drawer title="Record an absence" onClose={() => setAbsenceFormOpen(false)} footer={<><button className="bb-btn bb-btn-secondary bb-btn-lg" onClick={() => setAbsenceFormOpen(false)}>Cancel</button><button className="bb-btn bb-btn-primary bb-btn-lg" disabled={saving || !actionChildId || !actionDate} onClick={markSelectedAbsent}><MinusCircle />Mark absent</button></>}>
+          {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
+          <div className="bb-stack">
+            {!isFamilyChildCare ? <ClassroomSelect classrooms={rooms} value={actionClassroomId} onChange={(id) => { setActionClassroomId(id); setActionChildId(""); }} label="Classroom" /> : null}
+            <ChildSelect children={actionChildren} value={actionChildId} onChange={setActionChildId} label="Child" placeholder="Choose a child" />
+            <Field label="Date"><input className="bb-input" type="date" value={actionDate} onChange={(event) => setActionDate(event.target.value)} /></Field>
+            <Field label="Type"><select className="bb-input" value={absenceType} onChange={(event) => setAbsenceType(event.target.value)}>{absenceTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+            <Field label="Reason"><input className="bb-input" value={absenceReason} onChange={(event) => setAbsenceReason(event.target.value)} placeholder="Parent called in sick, vacation, no-show…" /></Field>
+            <Field label="Notes (internal)"><textarea className="bb-input" value={absenceNotes} onChange={(event) => setAbsenceNotes(event.target.value)} placeholder="Optional" /></Field>
+          </div>
+        </Drawer>
+      ) : null}
+
+      {data && activeTab === "early" ? <DataTable rows={earlyRecords} columns={recordColumns} emptyTitle="No early checkouts" emptyDetail="Children picked up before the end of the attendance day appear here." /> : null}
+      {data && activeTab === "missing" ? <DataTable rows={missingRecords} columns={recordColumns} emptyTitle="No missing checkouts" emptyDetail="Every child who was checked in has been checked out." /> : null}
+      {data && activeTab === "corrections" ? <DataTable rows={correctedRecords} columns={recordColumns} emptyTitle="No corrections for this day" emptyDetail="Corrected check-in and check-out times appear here with their reason in the audit log." /> : null}
+
+      {detailsFor ? (
+        <Dialog title={detailsFor.child.name} onClose={() => setDetailsFor(null)}>
+          <div className="bb-stack" style={{ gap: 15 }}>
+            <div className="bb-row"><Status spec={detailsFor.spec} /><span>{detailsFor.sub}</span></div>
+            <p className="bb-muted">{[isFamilyChildCare ? "Family child care" : detailsFor.child.classroom, detailsFor.child.childCode].filter(Boolean).join(" · ")}{detailsFor.record?.signedBy ? ` · signed by ${detailsFor.record.signedBy}` : ""}</p>
+            <div className="bb-row">
+              <button className="bb-btn bb-btn-primary" disabled={saving} onClick={() => checkChild(detailsFor.child, "in")}><SignIn />Check in</button>
+              <button className="bb-btn bb-btn-secondary" disabled={saving} onClick={() => checkChild(detailsFor.child, "out")}><SignOut />Check out</button>
+              <button className="bb-btn bb-btn-secondary" disabled={saving} onClick={() => openSigningModal(detailsFor.child, detailsFor.record && !detailsFor.record.checkOutTime ? "out" : "in")}>Guardian / pickup signing</button>
+            </div>
+            <div className="bb-row">
+              {detailsFor.record ? <button className="bb-btn bb-btn-secondary" onClick={() => openCorrection(detailsFor.record)}>Correct times</button> : null}
+              {detailsFor.record ? <button className="bb-btn bb-btn-ghost" onClick={() => { setShowAuditFor(detailsFor.record); setDetailsFor(null); }}>View audit</button> : null}
+              <button className="bb-btn bb-btn-ghost" onClick={() => { setActionChildId(String(detailsFor.child.id)); setActionClassroomId(""); setActionDate(filterDate || today); setDetailsFor(null); chooseTab("absences"); setAbsenceFormOpen(true); }}>Record absence</button>
+            </div>
+          </div>
+        </Dialog>
+      ) : null}
 
       {selectedRecord ? (
-        <Modal title="Correct attendance record" onClose={() => setSelectedRecord(null)}>
-          <div className="record-summary">
-            <strong>{selectedRecord.childName} - {selectedRecord.childCode ?? "Uncoded"}</strong>
-            <span>{selectedRecord.classroom} - {selectedRecord.date}</span>
-            <span>Current check-in: {selectedRecord.checkInTime ?? "Not recorded"} | Current check-out: {selectedRecord.checkOutTime ?? "Pending"}</span>
+        <Dialog title="Correct attendance" onClose={() => setSelectedRecord(null)} actions={<><button className="bb-btn bb-btn-secondary" onClick={() => setSelectedRecord(null)}>Cancel</button><button className="bb-btn bb-btn-primary" disabled={saving || !reason.trim()} onClick={() => runAction(() => attendanceApi.correct(selectedRecord.id, { reason, check_in_time: newIn || undefined, check_out_time: newOut || undefined }).then(() => undefined), "Attendance correction saved.")}>Save correction</button></>}>
+          <div className="bb-stack" style={{ gap: 15 }}>
+            <p><strong>{selectedRecord.childName}</strong> · {selectedRecord.childCode ?? ""} · {shortDate(selectedRecord.date, { weekday: "long", day: "numeric", month: "long" })}</p>
+            <p className="bb-muted">Currently in {recordTime(selectedRecord, "in") || "not recorded"} · out {recordTime(selectedRecord, "out") || "not recorded"}</p>
+            {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
+            <div className="bb-form-grid">
+              <Field label="New check-in time"><input className="bb-input" type="datetime-local" max={nowForInput} value={newIn.length <= 5 ? `${selectedRecord.date}T${newIn}` : newIn} onChange={(event) => setNewIn(event.target.value)} /></Field>
+              <Field label="New check-out time"><input className="bb-input" type="datetime-local" max={nowForInput} value={newOut.length <= 5 && newOut ? `${selectedRecord.date}T${newOut}` : newOut} onChange={(event) => setNewOut(event.target.value)} /></Field>
+              <Field label="Reason (required, kept in the audit log)" className="full"><textarea className="bb-input" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Parent called ahead, tablet was offline…" /></Field>
+            </div>
           </div>
-          <div className="form-grid">
-            <label className="field-stack"><span>New check-in time</span><input type="datetime-local" max={nowForInput} value={newIn.length <= 5 ? `${selectedRecord.date}T${newIn}` : newIn} onChange={(event) => setNewIn(event.target.value)} /></label>
-            <label className="field-stack"><span>New check-out time</span><input type="datetime-local" max={nowForInput} value={newOut.length <= 5 && newOut ? `${selectedRecord.date}T${newOut}` : newOut} onChange={(event) => setNewOut(event.target.value)} /></label>
-            <textarea className="full" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Correction reason required" />
-            <button className="primary" disabled={saving || !reason.trim()} onClick={() => runAction(() => attendanceApi.correct(selectedRecord.id, { reason, check_in_time: newIn || undefined, check_out_time: newOut || undefined }).then(() => undefined), "Attendance correction saved.")}>Save correction</button>
-          </div>
-        </Modal>
+        </Dialog>
       ) : null}
 
       {showAuditFor ? (
-        <Modal title={`Audit log: ${showAuditFor.childName}`} onClose={() => setShowAuditFor(null)}>
-          <DataTable rows={recordAuditLogs?.recordId === String(showAuditFor.id) ? recordAuditLogs.logs.filter((log: any) => String(log.attendance_record_id) === String(showAuditFor.id)) : []} emptyTitle={recordAuditLogs?.recordId === String(showAuditFor.id) ? "No audit entries for this record." : "Loading audit entries..."} emptyDetail="Corrections and check-in/out edits will appear here." columns={[
-            { header: "Action", render: (row: any) => row.action },
-            { header: "Reason", render: (row: any) => row.reason },
-            { header: "Edited by", render: (row: any) => row.editedBy ?? row.editedByEmail ?? "System" },
-            { header: "Edited at", render: (row: any) => row.editedAtLocal ? `${row.date ?? ""} ${formatAttendanceTime(row.editedAtLocal, row.timezone)}` : new Date(row.edited_at).toLocaleString() }
-          ]} />
-        </Modal>
+        <Dialog wide title={`Audit history · ${showAuditFor.childName}`} onClose={() => setShowAuditFor(null)}>
+          {recordAuditLogs?.recordId !== String(showAuditFor.id) ? <LoadingState rows={3} /> : (
+            <DataTable rows={recordAuditLogs.logs.filter((log: any) => String(log.attendance_record_id) === String(showAuditFor.id))} emptyTitle="No audit entries for this record" emptyDetail="Corrections and check-in/out edits will appear here." columns={[
+              { header: "When", render: (row: any) => `${shortDate(row.date)} · ${clockTime(row.editedAtLocal ?? row.edited_at, row.timezone)}` },
+              { header: "Action", render: (row: any) => String(row.action ?? "").replace(/_/g, " ") },
+              { header: "Reason", render: (row: any) => row.reason },
+              { header: "By", render: (row: any) => row.editedBy ?? row.editedByEmail ?? "System" }
+            ]} />
+          )}
+        </Dialog>
       ) : null}
 
       {signingChild ? (
-        <Modal title={`Guardian / pickup signing: ${signingChild.name}`} onClose={() => setSigningChild(null)}>
-          <div className="record-summary">
-            <strong>{childLabel(signingChild)}</strong>
-            <span>Use this for staff-assisted tablet or front-desk signing. The selected signer identity and typed signature are saved with attendance.</span>
-          </div>
-          <div className="form-grid">
-            <label className="field-stack"><span>Action</span><select value={signingDirection} onChange={(event) => setSigningDirection(event.target.value as "in" | "out")}>
-              <option value="in">Sign check-in</option>
-              <option value="out">Sign check-out</option>
-            </select></label>
-            <label className="field-stack"><span>Authorized signer</span><select value={signerValue} onChange={(event) => {
+        <Dialog title={`Guardian signing · ${signingChild.name}`} onClose={() => setSigningChild(null)} actions={<><button className="bb-btn bb-btn-secondary" onClick={() => setSigningChild(null)}>Cancel</button><button className="bb-btn bb-btn-primary" disabled={saving || !signerValue || !signatureName.trim()} onClick={submitGuardianSigning}>Save signed attendance</button></>}>
+          <div className="bb-stack" style={{ gap: 15 }}>
+            <p className="bb-muted">For staff-assisted signing at the front desk. The signer’s identity and typed signature are saved with the attendance record.</p>
+            {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
+            <Segmented label="Action" value={signingDirection} onChange={setSigningDirection} items={[{ key: "in", label: "Sign check-in" }, { key: "out", label: "Sign check-out" }]} />
+            <Field label="Authorized signer"><select className="bb-input" value={signerValue} onChange={(event) => {
               setSignerValue(event.target.value);
               const signer = signers.find((item) => `${item.type}:${item.id}` === event.target.value);
               setSignatureName(signer?.name ?? "");
             }}>
               <option value="">Choose guardian or authorized pickup</option>
-              {signers.map((signer) => <option key={`${signer.type}:${signer.id}`} value={`${signer.type}:${signer.id}`}>{signer.name} - {signer.relationship ?? signer.type} - {signer.can_pickup ? "Pickup allowed" : "Pickup not allowed"}</option>)}
-            </select></label>
-            <label className="field-stack"><span>Typed signature</span><input value={signatureName} onChange={(event) => setSignatureName(event.target.value)} placeholder="Signer types their full name" /></label>
-            <button className="primary" disabled={saving || !signerValue || !signatureName.trim()} onClick={submitGuardianSigning}>Save signed attendance</button>
+              {signers.map((signer) => <option key={`${signer.type}:${signer.id}`} value={`${signer.type}:${signer.id}`}>{signer.name} · {signer.relationship ?? signer.type} · {signer.can_pickup ? "pickup allowed" : "pickup not allowed"}</option>)}
+            </select></Field>
+            <Field label="Typed signature"><input className="bb-input" value={signatureName} onChange={(event) => setSignatureName(event.target.value)} placeholder="Signer types their full name" /></Field>
           </div>
-        </Modal>
+        </Dialog>
       ) : null}
 
       {kioskOpen ? (
-        <div className="kiosk-overlay">
-          <div className="kiosk-shell">
-            <header className="kiosk-header">
-              <div><span>Kiosk / Tablet Mode</span><h1>Attendance signing</h1><p>Large touch-friendly flow for front-desk or classroom tablet use.</p></div>
-              <button className="secondary" onClick={() => setKioskOpen(false)}>Exit kiosk</button>
-            </header>
-            <div className="kiosk-progress">
-              {(isFamilyChildCare ? ["Child", "Action", "Signer", "Verify", "Signature", "Done"] : ["Classroom", "Child", "Action", "Signer", "Verify", "Signature", "Done"]).map((label, index) => <span key={label} className={kioskStep >= index + (isFamilyChildCare ? 2 : 1) ? "active" : ""}>{label}</span>)}
+        <div className="bb-kiosk" role="dialog" aria-modal="true" aria-label="Tablet mode">
+          {kioskStep === 7 ? (
+            <section className="bb-kiosk-done">
+              <span className="bb-kiosk-check"><Check weight="bold" size={78} /></span>
+              <h1>{kioskAction === "absent" ? "Absence recorded" : `${selectedKioskChild()?.firstName ?? selectedKioskChild()?.name ?? "Child"} is checked ${kioskAction === "in" ? "in" : "out"}`}</h1>
+              <p className="lead">{kioskSuccess}</p>
+              <p>{kioskAction === "absent" ? "" : kioskMethod === "pin" ? "Verified with staff PIN and signature" : "Verified with signature"}</p>
+              <div className="bb-row" style={{ justifyContent: "center" }}>
+                <button className="bb-btn bb-kiosk-light" onClick={openKioskMode}>Next child</button>
+                <button className="bb-btn bb-kiosk-ghost" onClick={closeKiosk}>Exit tablet mode</button>
+              </div>
+              {kioskCountdown ? <p>Returning to the child list in {kioskCountdown} seconds</p> : null}
+            </section>
+          ) : (
+            <div className="bb-kiosk-body">
+              <header className="bb-kiosk-top">
+                {kioskStep > 2 ? <button className="bb-btn bb-btn-secondary bb-kiosk-btn" onClick={() => { setActionError(""); setKioskStep(kioskStep === 6 && kioskAction === "absent" ? 3 : kioskStep - 1); }}><ArrowLeft size={22} />Back</button>
+                  : <div className="bb-gate-brand"><LogoTile /><strong>Tablet mode</strong><span>{data?.organization?.name}</span></div>}
+                <span className="bb-kiosk-steps">{["Child", "Action", "Signer", "Sign", "Done"].map((label, index) => {
+                  const stepIndex = kioskStep <= 2 ? 0 : kioskStep === 3 ? 1 : kioskStep <= 5 ? 2 : kioskStep === 6 ? 3 : 4;
+                  return <span key={label}>{index ? " · " : ""}{index === stepIndex ? <b>{label}</b> : label}</span>;
+                })}</span>
+                <button className="bb-btn bb-btn-secondary bb-kiosk-btn" onClick={closeKiosk}><LockSimple size={22} />Exit</button>
+              </header>
+              {!isOnline ? <Alert tone="info">You’re offline. Attendance can’t be saved until the connection returns.</Alert> : null}
+              {actionError ? <Alert tone="danger" title="That didn’t work">{actionError}</Alert> : null}
+
+              {kioskStep === 2 ? (
+                <section>
+                  <h2 className="bb-kiosk-title">Who’s arriving or leaving?</h2>
+                  <div className="bb-kiosk-filter">
+                    <SearchInput white value={kioskSearch} onChange={setKioskSearch} placeholder="Search by child’s name" />
+                    {!isFamilyChildCare && rooms.length ? <Segmented touch label="Classroom" value={kioskClassroomId || "all"} onChange={(value) => setKioskClassroomId(value === "all" ? "" : value)} items={[{ key: "all", label: "All" }, ...rooms.map((room) => ({ key: String(room.id), label: String(room.name).replace(/ Room$/, "") }))]} /> : null}
+                  </div>
+                  {(() => {
+                    const query = kioskSearch.trim().toLowerCase();
+                    const list = (data?.children ?? []).filter((child: any) => (!kioskClassroomId || String(child.classroomId) === kioskClassroomId) && (!query || String(child.name).toLowerCase().includes(query)));
+                    const todayRecords = new Map((data?.attendance ?? []).filter((record: any) => record.date === today).map((record: any) => [String(record.childId), record]));
+                    const todayAbsent = new Set((data?.absences ?? []).filter((absence: any) => (absence.absenceDate ?? absence.absence_date) === today && absence.status !== "cancelled").map((absence: any) => String(absence.childId)));
+                    if (!list.length) return <EmptyState title={query ? "No child found" : "No children in this room"}>{query ? "Check the spelling, or choose All rooms." : "Choose another room."}</EmptyState>;
+                    return (
+                      <div className="bb-kiosk-grid">
+                        {list.map((child: any) => {
+                          const record = todayRecords.get(String(child.id));
+                          const key = record ? record.status : todayAbsent.has(String(child.id)) ? "absent" : "not_checked_in";
+                          return (
+                            <button key={child.id} className="bb-kiosk-tile" onClick={() => { setKioskChildId(String(child.id)); setKioskStep(3); setActionError(""); }}>
+                              <Avatar name={child.name} seed={child.id} size={56} />
+                              <strong>{child.name}</strong>
+                              <StatusBadge map={attendanceStatuses} value={key} />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </section>
+              ) : null}
+
+              {kioskStep === 3 && selectedKioskChild() ? (() => {
+                const child = selectedKioskChild();
+                const record = (data?.attendance ?? []).find((item: any) => item.date === today && String(item.childId) === String(child.id));
+                const checkedIn = record && !record.checkOutTime;
+                const key = record ? record.status : "not_checked_in";
+                return (
+                  <section>
+                    <div className="bb-kiosk-child">
+                      <Avatar name={child.name} seed={child.id} size={112} />
+                      <div><h2>{child.name}</h2><p>{[isFamilyChildCare ? "Family child care" : child.classroom, child.age].filter(Boolean).join(" · ")}</p><StatusBadge map={attendanceStatuses} value={key} size="lg" /></div>
+                    </div>
+                    <div className="bb-kiosk-actions">
+                      {checkedIn ? <button className="bb-kiosk-action primary" disabled={saving} onClick={() => chooseKioskAction("out")}><SignOut size={46} />Check out</button>
+                        : <button className="bb-kiosk-action primary" disabled={saving} onClick={() => chooseKioskAction("in")}><SignIn size={46} />Check in</button>}
+                      <button className="bb-kiosk-action" disabled={saving} onClick={() => chooseKioskAction("absent")}><MinusCircle size={40} />Mark absent</button>
+                    </div>
+                    <p className="bb-note"><Info size={18} />{checkedIn ? `${child.firstName ?? child.name} is checked in, so check out is shown.` : `Check out appears once ${child.firstName ?? child.name} is checked in.`}</p>
+                  </section>
+                );
+              })() : null}
+
+              {(kioskStep === 4 || kioskStep === 5) ? (
+                <section className="bb-kiosk-split">
+                  <div>
+                    <h2 className="bb-kiosk-title">Who is {kioskAction === "in" ? "dropping" : "picking"} {selectedKioskChild()?.firstName ?? "them"} {kioskAction === "in" ? "off" : "up"}?</h2>
+                    <div className="bb-stack" style={{ gap: 12 }}>
+                      {kioskSigners.map((signer) => {
+                        const value = `${signer.type}:${signer.id}`;
+                        const allowed = signer.can_pickup;
+                        return (
+                          <button key={value} disabled={!allowed} className={`bb-signer${kioskSignerValue === value ? " on" : ""}`} onClick={() => chooseKioskSigner(value)}>
+                            <Avatar name={signer.name} seed={value} size={56} />
+                            <div><strong>{signer.name}</strong><span>{signer.relationship ?? signer.type}{allowed ? "" : " · not authorized for pickup"}</span></div>
+                          </button>
+                        );
+                      })}
+                      <button className={`bb-signer outline${kioskSignerValue === "staff:staff" ? " on" : ""}`} onClick={() => chooseKioskSigner("staff:staff")}>
+                        <IdentificationBadge size={36} color="var(--bb-accent)" />
+                        <div><strong>Staff-assisted</strong><span>The signed-in staff member signs</span></div>
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="bb-kiosk-subtitle">Verify with</h3>
+                    <Segmented touch label="Verification method" value={kioskMethod === "pin" ? "pin" : kioskMethod === "secure_login" ? "secure_login" : "digital_signature"} onChange={(value) => { setKioskMethod(value); setKioskPin(""); }} items={[{ key: "digital_signature", label: "Signature" }, { key: "pin", label: "Staff PIN" }, { key: "secure_login", label: "Secure login" }]} />
+                    {kioskMethod === "pin" ? <PinPad value={kioskPin} onChange={setKioskPin} label="Staff, enter your PIN" /> : <p className="bb-note">{kioskMethod === "secure_login" ? "Your signed-in session is recorded as the verification." : "The signer draws their signature on the next screen."}</p>}
+                    <button className="bb-btn bb-btn-primary bb-btn-touch bb-btn-block" style={{ marginTop: 30 }} disabled={!kioskSignerValue || (kioskMethod === "pin" && kioskPin.length < 4)} onClick={() => setKioskStep(6)}>Continue</button>
+                  </div>
+                </section>
+              ) : null}
+
+              {kioskStep === 6 && kioskAction === "absent" ? (
+                <section style={{ maxWidth: 720 }}>
+                  <h2 className="bb-kiosk-title">Mark {selectedKioskChild()?.firstName ?? "child"} absent today</h2>
+                  <div className="bb-stack">
+                    <Segmented touch label="Absence type" value={kioskAbsenceType} onChange={setKioskAbsenceType} items={absenceTypes.map(([value, label]) => ({ key: value, label }))} />
+                    <Field label="Reason"><input className="bb-input white bb-kiosk-input" value={kioskAbsenceReason} onChange={(event) => setKioskAbsenceReason(event.target.value)} placeholder="Parent reported sick, vacation, no-show…" /></Field>
+                    <Field label="Notes (internal)"><textarea className="bb-input white" value={kioskAbsenceNotes} onChange={(event) => setKioskAbsenceNotes(event.target.value)} placeholder="Optional" /></Field>
+                    <button className="bb-btn bb-btn-primary bb-btn-touch" disabled={saving} onClick={submitKiosk}><MinusCircle size={26} />Mark {absenceLabel(kioskAbsenceType).toLowerCase()} absence</button>
+                  </div>
+                </section>
+              ) : null}
+
+              {kioskStep === 6 && kioskAction !== "absent" ? (
+                <section>
+                  <h2 className="bb-kiosk-title" style={{ marginBottom: 8 }}>Sign to check {kioskAction === "in" ? "in" : "out"} {selectedKioskChild()?.firstName ?? ""}</h2>
+                  <p className="bb-kiosk-meta">{selectedKioskSigner()?.name} · {new Date().toLocaleString(undefined, { weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit" })}</p>
+                  <Field label="Typed name (must match the signer)"><input className="bb-input white bb-kiosk-input" value={kioskSignatureName} onChange={(event) => setKioskSignatureName(event.target.value)} placeholder="Full name" /></Field>
+                  <div className="bb-signature">
+                    <canvas ref={signatureCanvasRef} onPointerDown={startSignature} onPointerMove={drawSignature} onPointerUp={endSignature} onPointerLeave={endSignature} aria-label="Signature pad" />
+                    <div className="line" />
+                    <span>{kioskSignatureDrawn ? "Signature captured" : "Sign above the line with your finger"}</span>
+                  </div>
+                  <div className="bb-row" style={{ justifyContent: "space-between", marginTop: 20 }}>
+                    <button className="bb-btn bb-btn-secondary bb-btn-touch" type="button" onClick={clearKioskSignature}><Eraser size={24} />Clear</button>
+                    <button className="bb-btn bb-btn-primary bb-btn-touch" disabled={saving} onClick={submitKiosk}><CheckSquare size={26} />{saving ? "Saving…" : `Confirm check-${kioskAction === "in" ? "in" : "out"}`}</button>
+                  </div>
+                </section>
+              ) : null}
             </div>
-            <ErrorAlert message={actionError} />
-            <SuccessAlert message={kioskSuccess} />
-
-            {!isFamilyChildCare && kioskStep === 1 ? <section className="kiosk-card"><h2>Select classroom</h2><div className="kiosk-choice-grid">{(data?.classrooms ?? []).map((room: any) => <button key={room.id} className={String(room.id) === kioskClassroomId ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => { setKioskClassroomId(String(room.id)); setKioskChildId(""); }}>{room.name}<small>Capacity {room.capacity ?? "n/a"}</small></button>)}</div><button className="primary" disabled={!kioskClassroomId} onClick={() => setKioskStep(2)}>Continue</button></section> : null}
-
-            {kioskStep === 2 ? <section className="kiosk-card"><h2>Select child</h2><div className="kiosk-choice-grid children">{kioskChildren.map((child: any) => <button key={child.id} className={String(child.id) === kioskChildId ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => setKioskChildId(String(child.id))}>{child.name}<small>{isFamilyChildCare ? "Family child care" : child.classroom} - ID: {child.childCode ?? child.child_code}</small></button>)}</div><div className="kiosk-actions">{!isFamilyChildCare ? <button className="secondary" onClick={() => setKioskStep(1)}>Back</button> : null}<button className="primary" disabled={!kioskChildId} onClick={() => setKioskStep(3)}>Continue</button></div></section> : null}
-
-            {kioskStep === 3 ? <section className="kiosk-card"><h2>Choose action</h2><div className="kiosk-choice-grid">{[{ id: "in", label: "Check in" }, { id: "out", label: "Check out" }, { id: "absent", label: "Mark absent" }].map((action) => <button key={action.id} className={kioskAction === action.id ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => setKioskAction(action.id as "in" | "out" | "absent")}>{action.label}</button>)}</div><div className="kiosk-actions"><button className="secondary" onClick={() => setKioskStep(2)}>Back</button><button className="primary" onClick={continueFromKioskAction}>Continue</button></div></section> : null}
-
-            {kioskStep === 4 ? <section className="kiosk-card"><h2>Select signer</h2><div className="kiosk-choice-grid children"><button className={kioskSignerValue === "staff:staff" ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => chooseKioskSigner("staff:staff")}>Staff-assisted<small>Logged-in staff signs and records verification</small></button>{kioskSigners.map((signer) => <button key={`${signer.type}:${signer.id}`} className={kioskSignerValue === `${signer.type}:${signer.id}` ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => chooseKioskSigner(`${signer.type}:${signer.id}`)}>{signer.name}<small>{signer.relationship ?? signer.type} - {signer.can_pickup ? "Authorized" : "Not authorized"}</small></button>)}</div><div className="kiosk-actions"><button className="secondary" onClick={() => setKioskStep(3)}>Back</button><button className="primary" disabled={!kioskSignerValue} onClick={() => setKioskStep(5)}>Continue</button></div></section> : null}
-
-            {kioskStep === 5 ? <section className="kiosk-card"><h2>Verification method</h2><div className="kiosk-choice-grid">{[{ id: "secure_login", label: "Secure login", detail: "Use the logged-in staff session" }, { id: "pin", label: "PIN", detail: "Verify staff PIN before saving" }, { id: "signature", label: "Signature", detail: "Drawn signature saved securely" }].map((method) => <button key={method.id} className={kioskMethod === method.id ? "kiosk-choice selected" : "kiosk-choice"} onClick={() => setKioskMethod(method.id)}>{method.label}<small>{method.detail}</small></button>)}</div>{kioskMethod === "pin" ? <label className="kiosk-input"><span>Staff PIN</span><input type="password" inputMode="numeric" maxLength={8} value={kioskPin} onChange={(event) => setKioskPin(event.target.value)} placeholder="Enter staff PIN" /></label> : null}<div className="kiosk-actions"><button className="secondary" onClick={() => setKioskStep(4)}>Back</button><button className="primary" onClick={() => setKioskStep(6)}>Continue</button></div></section> : null}
-
-            {kioskStep === 6 ? <section className="kiosk-card"><h2>{kioskAction === "absent" ? "Confirm absence" : "Draw signature"}</h2><div className="record-summary"><strong>{selectedKioskChild() ? childLabel(selectedKioskChild()) : "No child selected"}</strong><span>Action: {kioskAction === "in" ? "Check in" : kioskAction === "out" ? "Check out" : "Mark absent"}</span>{selectedKioskSigner() ? <span>Signer: {selectedKioskSigner()?.name}</span> : null}</div>{kioskAction === "absent" ? <div className="form-grid">
-              <label className="field-stack"><span>Absence type</span><select value={kioskAbsenceType} onChange={(event) => setKioskAbsenceType(event.target.value)}>{absenceTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-              <label className="field-stack"><span>Reason</span><input value={kioskAbsenceReason} onChange={(event) => setKioskAbsenceReason(event.target.value)} placeholder="Parent reported sick, vacation, no-show..." /></label>
-              <label className="field-stack full"><span>Notes</span><textarea value={kioskAbsenceNotes} onChange={(event) => setKioskAbsenceNotes(event.target.value)} placeholder="Optional internal notes" /></label>
-            </div> : <><label className="kiosk-input"><span>Signer typed name</span><input value={kioskSignatureName} onChange={(event) => setKioskSignatureName(event.target.value)} placeholder="Full legal name" /></label><div className="signature-pad"><div><strong>Draw signature</strong><span>{kioskSignatureDrawn ? "Signature captured" : "Use finger, stylus, or mouse"}</span></div><canvas ref={signatureCanvasRef} onPointerDown={startSignature} onPointerMove={drawSignature} onPointerUp={endSignature} onPointerLeave={endSignature} /><button className="secondary" type="button" onClick={clearKioskSignature}>Clear signature</button></div></>}<div className="kiosk-actions"><button className="secondary" onClick={() => setKioskStep(kioskAction === "absent" ? 3 : 5)}>Back</button><button className="primary" disabled={saving} onClick={submitKiosk}>{kioskAction === "absent" ? `Mark ${absenceLabel(kioskAbsenceType).toLowerCase()} absence` : "Save signed attendance"}</button></div></section> : null}
-
-            {kioskStep === 7 ? <section className="kiosk-card confirmation"><h2>Saved</h2><p>{kioskSuccess}</p><div className="kiosk-actions"><button className="secondary" onClick={() => setKioskOpen(false)}>Exit kiosk</button><button className="primary" onClick={openKioskMode}>Start another attendance action</button></div></section> : null}
-          </div>
+          )}
         </div>
       ) : null}
-    </section>
+    </main>
   );
 }

@@ -26,7 +26,7 @@ export function SubscriptionsPage() {
     }
   }
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Platform Billing" title="Organization subscriptions" action={<button className="primary" onClick={() => setAssigning(true)}>Assign plan</button>} />
     <Alert tone="warning" message="Manual subscription management is active. Stripe IDs are optional test-mode readiness fields only." />
     <Alert message={success} />

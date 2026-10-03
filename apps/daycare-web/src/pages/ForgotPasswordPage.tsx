@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { authApi, getApiError } from "@barbaari/shared";
+import { Alert, AuthFrame, Field } from "@barbaari/shared/web/ui";
 
 export function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -22,24 +23,17 @@ export function ForgotPasswordPage() {
   }
 
   return (
-    <main className="auth-shell">
-      <form className="auth-card" onSubmit={submit}>
-        <div className="auth-brand">
-          <div className="auth-mark">B</div>
-          <div>
-            <span>Password recovery</span>
-            <h1>Forgot password</h1>
-            <p>Enter your email and we will send a reset link.</p>
-          </div>
-        </div>
-        <div className="auth-form">
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" required />
-          <button className="primary" disabled={loading}>{loading ? "Sending..." : "Send reset link"}</button>
-        </div>
-        {success ? <div className="alert success">{success}</div> : null}
-        {error ? <div className="alert danger">{error}</div> : null}
-        <div className="auth-links">Remember your password? <Link to="/login">Back to login</Link></div>
+    <AuthFrame foot={<Link to="/login">Back to sign in</Link>}>
+      <div>
+        <h1>Reset your password</h1>
+        <p className="bb-lede" style={{ marginTop: 8 }}>Enter your email and we’ll send you a reset link.</p>
+      </div>
+      {success ? <Alert tone="ok">{success}</Alert> : null}
+      {error ? <Alert tone="danger">{error}</Alert> : null}
+      <form className="bb-auth-form" onSubmit={submit}>
+        <Field label="Email" htmlFor="forgot-email"><input id="forgot-email" className="bb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" /></Field>
+        <button className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" disabled={loading}>{loading ? "Sending…" : "Send reset link"}</button>
       </form>
-    </main>
+    </AuthFrame>
   );
 }

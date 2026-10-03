@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { daycarePlatformBillingApi, getApiError } from "@barbaari/shared";
+import { CalendarX, Lock, Prohibit, ShieldCheck, X } from "@phosphor-icons/react";
+import { Alert, LoadingState, LogoTile } from "@barbaari/shared/web/ui";
 import { useAsyncData } from "../hooks/useAsyncData";
 import { clearSession } from "../services/auth";
 
@@ -96,454 +98,128 @@ export function SubscriptionPaymentPage() {
     }
   }
 
-  if (loading) {
-    return (
-      <main style={styles.page}>
-        <div style={styles.loadingWrap}>
-          <div style={styles.spinner} />
-          <p style={styles.loadingText}>Loading your subscription…</p>
+  const signOut = () => { clearSession(); location.href = "/login"; };
+  const shell = (content: React.ReactNode) => (
+    <div style={{ minHeight: "100dvh", background: "var(--bb-bg)" }}>
+      <header className="bb-gate-top">
+        <div className="bb-gate-brand"><LogoTile size={36} /><strong>Barbaari</strong><span>{org?.name ?? ""}</span></div>
+        <div className="bb-row">
+          <a className="bb-btn bb-btn-ghost" href="mailto:support@barbaari.app">Contact support</a>
+          <button className="bb-btn bb-btn-secondary" onClick={signOut}>Sign out</button>
         </div>
-      </main>
-    );
-  }
+      </header>
+      {content}
+    </div>
+  );
+
+  if (loading && !data) return shell(<main className="bb-gate" style={{ display: "block" }}><LoadingState label="Loading your subscription" /></main>);
 
   if (isSuspended) {
-    return (
-      <main style={styles.page}>
-        <div style={styles.card}>
-          <div style={{ textAlign: "center", padding: "8px 0 24px" }}>
-            <div style={iconCircle("danger")}>⚠</div>
-            <h1 style={styles.cardTitle}>Account suspended</h1>
-            <p style={styles.cardSubtitle}>Your organization's access has been suspended. Please contact Barbaari support to resolve this.</p>
-          </div>
-          <div style={styles.actionsCol}>
-            <a href="mailto:support@barbaari.app" style={styles.primaryBtn}>Contact support</a>
-            <button style={styles.ghostBtn} onClick={() => { clearSession(); location.href = "/login"; }}>Logout</button>
-          </div>
+    return shell(
+      <main className="bb-gate">
+        <div className="bb-stack" style={{ gap: 20 }}>
+          <span className="bb-status danger" style={{ alignSelf: "flex-start" }}><Prohibit size={16} />Account suspended</span>
+          <h1>Your account is suspended</h1>
+          <p>Your organization's access has been suspended. Please contact Barbaari support to resolve this.</p>
+          <p className="bb-caption">support@barbaari.app</p>
         </div>
+        <aside className="bb-panel bb-stack">
+          <a className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" href="mailto:support@barbaari.app">Contact support</a>
+          <button className="bb-btn bb-btn-secondary bb-btn-lg bb-btn-block" onClick={signOut}>Sign out</button>
+        </aside>
       </main>
     );
   }
 
   // Requires payment but no invoice is on record yet — the org's period has lapsed by
   // date (SubscriptionAccessService::requiresPayment()) without ever being re-invoiced.
-  // This must not be confused with the genuine "still being configured" state below:
-  // that one only applies when payment ISN'T required, so no "pay" action would make
-  // sense there. payWithStripe() (unchanged) already handles this correctly server-side
-  // — createStripeCheckoutSession() now generates the renewal invoice itself before
-  // proceeding to checkout, so this button needs no invoice-specific data up front.
+  // payWithStripe() handles this server-side: createStripeCheckoutSession() generates the
+  // renewal invoice itself before proceeding to checkout.
   if (!hasInvoice && data?.requires_payment) {
-    const billingCycle = subscription?.billing_cycle === "yearly" ? "Yearly" : "Monthly";
+    const billingCycle = subscription?.billing_cycle === "yearly" ? "yearly" : "monthly";
     const cyclePrice = subscription?.billing_cycle === "yearly" ? plan?.yearly_price : plan?.monthly_price;
     const currency = plan?.currency ?? "USD";
-
-    return (
-      <main style={styles.page}>
-        <div style={styles.header}>
-          <div style={styles.brandMark}>B</div>
-          <div>
-            <div style={styles.headerEyebrow}>Barbaari</div>
-            <div style={styles.headerOrg}>{org?.name ?? "Your Organization"}</div>
-          </div>
+    return shell(
+      <main className="bb-gate">
+        <div className="bb-stack" style={{ gap: 25 }}>
+          <span className="bb-status danger" style={{ alignSelf: "flex-start" }}><CalendarX size={16} />Subscription expired</span>
+          <h1>Renew your subscription to keep going</h1>
+          {error ? <Alert tone="danger">{error}</Alert> : null}
+          <section><h4>What happened</h4><p>Your {plan?.name ?? ""} plan expired{subscription?.current_period_end ? ` on ${dateShort(subscription.current_period_end)}` : ""}.</p></section>
+          <section><h4>What’s paused</h4><p>Admins and managers can’t open the dashboard, attendance or tablet mode until payment is complete. Your children, guardians and attendance records are unchanged.</p></section>
+          <section><h4>What to do</h4><p>Renew below. Once payment is confirmed you’ll go straight back to your dashboard.</p></section>
         </div>
-
-        {error && <div style={styles.errorBanner}>{error}</div>}
-
-        <div style={styles.card}>
-          <div style={{ textAlign: "center", padding: "8px 0 24px" }}>
-            <div style={iconCircle("danger")}>⏰</div>
-            <h1 style={styles.cardTitle}>Subscription expired</h1>
-            <p style={styles.cardSubtitle}>
-              Your {plan?.name ?? "subscription"} plan expired
-              {subscription?.current_period_end ? ` on ${dateShort(subscription.current_period_end)}` : ""}.
-              Renew now to restore access.
-            </p>
-          </div>
-
-          <div style={styles.divider} />
-
-          <div style={styles.invoiceRow}>
-            <span style={styles.invoiceLabel}>Plan</span>
-            <span style={styles.invoiceValue}>{plan?.name ?? "—"}</span>
-          </div>
-          <div style={styles.invoiceRow}>
-            <span style={styles.invoiceLabel}>Billing cycle</span>
-            <span style={styles.invoiceValue}>{billingCycle}</span>
-          </div>
-          {cyclePrice != null && (
-            <div style={styles.invoiceRow}>
-              <span style={styles.invoiceLabel}>Price</span>
-              <span style={{ ...styles.invoiceValue, fontSize: 18, fontWeight: 800, color: "#20343b" }}>
-                {fmt(cyclePrice, currency)}
-                <span style={styles.pricePer}>{subscription?.billing_cycle === "yearly" ? "/year" : "/month"}</span>
-              </span>
-            </div>
-          )}
-          {subscription?.current_period_end && (
-            <div style={styles.invoiceRow}>
-              <span style={styles.invoiceLabel}>Expired on</span>
-              <span style={{ ...styles.invoiceValue, color: "#b45309", fontWeight: 700 }}>
-                {dateShort(subscription.current_period_end)}
-              </span>
-            </div>
-          )}
-
-          <div style={styles.divider} />
-
-          <button
-            style={{ ...styles.primaryBtn, ...(paying ? styles.btnDisabled : {}) }}
-            disabled={paying}
-            onClick={payWithStripe}
-          >
-            {paying ? <><span style={styles.btnSpinner} /> Working…</> : "Renew subscription →"}
-          </button>
-          <p style={styles.stripeNote}>Secure payment via Stripe. Barbaari never stores card details.</p>
-
-          <div style={styles.otherActions}>
-            <button style={styles.ghostBtn} onClick={() => { clearSession(); location.href = "/login"; }}>Logout</button>
-            <a href="mailto:support@barbaari.app" style={styles.ghostBtn}>Contact support</a>
-          </div>
-        </div>
+        <aside className="bb-panel">
+          <p className="bb-overline">Amount due</p>
+          <div className="bb-amount" style={{ margin: "12px 0 20px" }}>{cyclePrice != null ? fmt(cyclePrice, currency) : "—"}</div>
+          <dl className="bb-sumlist" style={{ marginBottom: 20 }}>
+            <div><dt>{plan?.name ?? "Plan"} · {billingCycle}</dt><dd>{cyclePrice != null ? fmt(cyclePrice, currency) : "—"}</dd></div>
+            {subscription?.current_period_end ? <div><dt>Expired on</dt><dd>{dateShort(subscription.current_period_end)}</dd></div> : null}
+          </dl>
+          <button className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" disabled={paying} onClick={payWithStripe}><Lock />{paying ? "Working…" : "Renew subscription"}</button>
+          <p className="bb-caption bb-row" style={{ marginTop: 12, flexWrap: "nowrap", alignItems: "flex-start", gap: 8 }}><ShieldCheck size={16} style={{ flex: "none" }} />You’ll pay on Stripe’s secure checkout. Barbaari never sees your card number.</p>
+        </aside>
       </main>
     );
   }
 
   if (!hasInvoice) {
-    return (
-      <main style={styles.page}>
-        <div style={styles.card}>
-          <div style={{ textAlign: "center", padding: "8px 0 24px" }}>
-            <div style={iconCircle("info")}>⏳</div>
-            <h1 style={styles.cardTitle}>Setting up your account</h1>
-            <p style={styles.cardSubtitle}>
-              Your subscription is being configured. This usually takes a moment.
-              If this persists, please contact support.
-            </p>
-          </div>
-          <div style={styles.actionsCol}>
-            <button style={styles.secondaryBtn} onClick={() => reload()}>Refresh</button>
-            <a href="mailto:support@barbaari.app" style={styles.ghostBtn}>Contact support</a>
-            <button style={styles.ghostBtn} onClick={() => { clearSession(); location.href = "/login"; }}>Logout</button>
-          </div>
+    return shell(
+      <main className="bb-gate">
+        <div className="bb-stack" style={{ gap: 20 }}>
+          <h1>Setting up your account</h1>
+          <p>Your subscription is being configured. This usually takes a moment. If this persists, please contact support.</p>
         </div>
+        <aside className="bb-panel bb-stack">
+          <button className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" onClick={() => reload()}>Refresh</button>
+          <a className="bb-btn bb-btn-secondary bb-btn-lg bb-btn-block" href="mailto:support@barbaari.app">Contact support</a>
+        </aside>
       </main>
     );
   }
 
   const features: string[] = plan?.features ?? [];
   const currency = invoice.currency ?? plan?.currency ?? "USD";
+  const overdue = invoice.due_date && new Date(invoice.due_date) < new Date();
 
-  return (
-    <main style={styles.page}>
-      <div style={styles.header}>
-        <div style={styles.brandMark}>B</div>
-        <div>
-          <div style={styles.headerEyebrow}>Barbaari</div>
-          <div style={styles.headerOrg}>{org?.name ?? "Your Organization"}</div>
-        </div>
+  return shell(
+    <main className="bb-gate">
+      <div className="bb-stack" style={{ gap: 25 }}>
+        <span className={`bb-status ${overdue ? "danger" : "warn"}`} style={{ alignSelf: "flex-start" }}><CalendarX size={16} />{overdue ? "Payment overdue" : "Payment required"}</span>
+        <h1>{status === "expired" ? "Renew your subscription to keep going" : "Complete payment to start using Barbaari"}</h1>
+        {canceledBanner ? (
+          <Alert tone="info" action={<button className="bb-btn bb-btn-ghost bb-btn-icon" aria-label="Dismiss" onClick={() => setCanceledBanner(false)}><X size={18} /></button>}>Payment was cancelled. Take your time — your account will be here when you're ready.</Alert>
+        ) : null}
+        {error ? <Alert tone="danger">{error}</Alert> : null}
+        <section><h4>What happened</h4><p>Invoice {invoice.invoice_number} for {fmt(invoice.balance_due, currency)} {overdue ? "was" : "is"} due on {dateShort(invoice.due_date)}{overdue ? " and hasn’t been paid" : ""}.</p></section>
+        <section><h4>What’s paused</h4><p>Admins and managers can’t open the dashboard, attendance or tablet mode until payment is complete. Your children, guardians and attendance records are unchanged.</p></section>
+        <section><h4>What to do</h4><p>Pay below. Once payment is confirmed you’ll go straight back to your dashboard.</p></section>
+        {features.length || plan?.child_limit != null ? (
+          <section>
+            <h4>Your {plan?.name ?? ""} plan includes</h4>
+            <div className="bb-row" style={{ gap: 8 }}>
+              {plan?.child_limit != null ? <span className="bb-tag accent">{plan.child_limit} children</span> : null}
+              {plan?.staff_limit != null ? <span className="bb-tag accent">{plan.staff_limit} staff</span> : null}
+              {plan?.device_limit != null ? <span className="bb-tag accent">{plan.device_limit} tablets</span> : null}
+              {features.slice(0, 4).map((feature) => <span key={feature} className="bb-tag">{titleize(feature)}</span>)}
+            </div>
+          </section>
+        ) : null}
       </div>
-
-      {canceledBanner && (
-        <div style={styles.cancelBanner}>
-          Payment was cancelled. Take your time — your account will be here when you're ready.
-          <button style={styles.bannerClose} onClick={() => setCanceledBanner(false)}>✕</button>
-        </div>
-      )}
-
-      {error && <div style={styles.errorBanner}>{error}</div>}
-
-      <div style={styles.card}>
-        <div style={styles.cardTop}>
-          <div>
-            <div style={styles.planLabel}>Your plan</div>
-            <h1 style={styles.planName}>{plan?.name ?? "Subscription"}</h1>
-          </div>
-          <div style={styles.priceBadge}>
-            <span style={styles.priceAmount}>{fmt(invoice.balance_due, currency)}</span>
-            <span style={styles.pricePer}>/month</span>
-          </div>
-        </div>
-
-        <div style={styles.divider} />
-
-        {/* What's included */}
-        <div style={styles.includesGrid}>
-          {plan?.child_limit != null && (
-            <div style={styles.includeItem}>
-              <span style={styles.includeIcon}>👶</span>
-              <span><strong>{plan.child_limit}</strong> children</span>
-            </div>
-          )}
-          {plan?.staff_limit != null && (
-            <div style={styles.includeItem}>
-              <span style={styles.includeIcon}>🧑‍🏫</span>
-              <span><strong>{plan.staff_limit}</strong> staff</span>
-            </div>
-          )}
-          {plan?.device_limit != null && (
-            <div style={styles.includeItem}>
-              <span style={styles.includeIcon}>📱</span>
-              <span><strong>{plan.device_limit}</strong> tablets</span>
-            </div>
-          )}
-          {features.slice(0, 4).map((f) => (
-            <div key={f} style={styles.includeItem}>
-              <span style={styles.includeIcon}>✓</span>
-              <span>{titleize(f)}</span>
-            </div>
-          ))}
-        </div>
-
-        <div style={styles.divider} />
-
-        {/* Invoice info */}
-        <div style={styles.invoiceRow}>
-          <span style={styles.invoiceLabel}>Invoice</span>
-          <span style={styles.invoiceValue}>{invoice.invoice_number}</span>
-        </div>
-        <div style={styles.invoiceRow}>
-          <span style={styles.invoiceLabel}>Due date</span>
-          <span style={{ ...styles.invoiceValue, color: "#b45309", fontWeight: 700 }}>
-            {dateShort(invoice.due_date)}
-          </span>
-        </div>
-        <div style={styles.invoiceRow}>
-          <span style={styles.invoiceLabel}>Amount due</span>
-          <span style={{ ...styles.invoiceValue, fontSize: 18, fontWeight: 800, color: "#20343b" }}>
-            {fmt(invoice.balance_due, currency)}
-          </span>
-        </div>
-
-        <div style={styles.divider} />
-
-        {/* CTA */}
-        <button
-          style={{ ...styles.primaryBtn, ...(paying ? styles.btnDisabled : {}) }}
-          disabled={paying}
-          onClick={payWithStripe}
-        >
-          {paying ? <><span style={styles.btnSpinner} /> Working…</> : "Pay with Stripe →"}
-        </button>
-        <p style={styles.stripeNote}>Secure payment via Stripe. Barbaari never stores card details.</p>
-
-        <div style={styles.otherActions}>
-          <button style={styles.ghostBtn} onClick={() => { clearSession(); location.href = "/login"; }}>Logout</button>
-          <a href="mailto:support@barbaari.app" style={styles.ghostBtn}>Contact support</a>
-        </div>
-
-        {data?.test_payment_enabled === true && (
-          <div style={styles.testingSection}>
-            <button
-              style={styles.testingLink}
-              disabled={testing}
-              onClick={testPayment}
-            >
-              {testing ? "Processing…" : "Local demo only: activate test payment"}
-            </button>
-          </div>
-        )}
-      </div>
+      <aside className="bb-panel">
+        <p className="bb-overline">Amount due</p>
+        <div className="bb-amount" style={{ margin: "12px 0 20px" }}>{fmt(invoice.balance_due, currency)}</div>
+        <dl className="bb-sumlist" style={{ marginBottom: 20 }}>
+          <div><dt>{plan?.name ?? "Subscription"} · {subscription?.billing_cycle === "yearly" ? "yearly" : "monthly"}</dt><dd>{fmt(invoice.balance_due, currency)}</dd></div>
+          <div><dt>Invoice</dt><dd>{invoice.invoice_number}</dd></div>
+          <div><dt>Due date</dt><dd style={overdue ? { color: "var(--bb-danger-fg)" } : undefined}>{dateShort(invoice.due_date)}</dd></div>
+        </dl>
+        <button className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" disabled={paying} onClick={payWithStripe}><Lock />{paying ? "Working…" : status === "expired" ? "Renew subscription" : "Pay with Stripe"}</button>
+        <p className="bb-caption bb-row" style={{ marginTop: 12, flexWrap: "nowrap", alignItems: "flex-start", gap: 8 }}><ShieldCheck size={16} style={{ flex: "none" }} />You’ll pay on Stripe’s secure checkout. Barbaari never sees your card number.</p>
+        {data?.test_payment_enabled === true ? (
+          <button className="bb-btn bb-btn-ghost" style={{ marginTop: 10 }} disabled={testing} onClick={testPayment}>{testing ? "Processing…" : "Local demo only: activate test payment"}</button>
+        ) : null}
+      </aside>
     </main>
   );
 }
-
-// ─── Inline styles (self-contained, no CSS dependency) ────────────────────────
-
-function iconCircle(type: "danger" | "info"): React.CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: 64,
-    height: 64,
-    borderRadius: "50%",
-    fontSize: 26,
-    marginBottom: 16,
-    background: type === "danger" ? "#ffe1e1" : "#e4f4f8",
-    color: type === "danger" ? "#b23a3a" : "#2a7b88",
-  };
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: "100dvh",
-    background: "linear-gradient(160deg, #eef8fb 0%, #f8fcfd 60%)",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    padding: "max(24px, env(safe-area-inset-top)) 16px max(40px, env(safe-area-inset-bottom))",
-    fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
-    overflowX: "hidden",
-  },
-  header: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    marginBottom: 28,
-    width: "100%",
-    maxWidth: 520,
-  },
-  brandMark: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    background: "#2a7b88",
-    color: "white",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: 900,
-    fontSize: 22,
-    flexShrink: 0,
-  },
-  headerEyebrow: { fontSize: 11, fontWeight: 900, color: "#2a7b88", textTransform: "uppercase", letterSpacing: "0.06em" },
-  headerOrg: { fontSize: 16, fontWeight: 800, color: "#20343b" },
-  loadingWrap: { display: "flex", flexDirection: "column", alignItems: "center", gap: 16, marginTop: 80 },
-  spinner: {
-    width: 36,
-    height: 36,
-    border: "3px solid #c9e2e8",
-    borderTopColor: "#2a7b88",
-    borderRadius: "50%",
-    animation: "spin 0.7s linear infinite",
-  },
-  loadingText: { color: "#647a82", fontWeight: 700 },
-  cancelBanner: {
-    width: "100%",
-    maxWidth: 520,
-    marginBottom: 14,
-    padding: "14px 16px",
-    background: "#fff4ca",
-    border: "1px solid #f4df8b",
-    borderRadius: 16,
-    color: "#9a6a09",
-    fontWeight: 750,
-    fontSize: 14,
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 12,
-  },
-  bannerClose: { background: "none", border: 0, cursor: "pointer", color: "#9a6a09", fontSize: 16, padding: 0, fontWeight: 900 },
-  errorBanner: {
-    width: "100%",
-    maxWidth: 520,
-    marginBottom: 14,
-    padding: "14px 16px",
-    background: "#ffe1e1",
-    border: "1px solid #ffc8c8",
-    borderRadius: 16,
-    color: "#b23a3a",
-    fontWeight: 750,
-    fontSize: 14,
-  },
-  card: {
-    width: "100%",
-    maxWidth: 520,
-    background: "white",
-    borderRadius: 28,
-    border: "1px solid #c9e2e8",
-    boxShadow: "0 24px 60px rgba(42,123,136,.14)",
-    padding: "clamp(22px, 5vw, 32px) clamp(18px, 5vw, 28px)",
-    overflow: "hidden",
-  },
-  cardTop: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 16,
-    marginBottom: 20,
-    flexWrap: "wrap",
-  },
-  planLabel: { fontSize: 11, fontWeight: 900, color: "#2a7b88", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 },
-  planName: { margin: 0, fontSize: "clamp(22px, 6vw, 26px)", fontWeight: 900, color: "#20343b", fontFamily: "Quicksand, sans-serif", overflowWrap: "anywhere" },
-  priceBadge: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: 2,
-    background: "#eef8fb",
-    border: "1px solid #c9e2e8",
-    borderRadius: 16,
-    padding: "8px 14px",
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  priceAmount: { fontSize: "clamp(22px, 7vw, 28px)", fontWeight: 900, color: "#20343b", fontFamily: "Quicksand, sans-serif", overflowWrap: "anywhere" },
-  pricePer: { fontSize: 14, color: "#647a82", fontWeight: 700 },
-  divider: { height: 1, background: "#e7f1f4", margin: "20px 0" },
-  includesGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px 16px" },
-  includeItem: { display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 700, color: "#20343b", minWidth: 0 },
-  includeIcon: { fontSize: 16, width: 22, textAlign: "center", flexShrink: 0 },
-  invoiceRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" },
-  invoiceLabel: { fontSize: 13, color: "#647a82", fontWeight: 700 },
-  invoiceValue: { fontSize: 14, color: "#20343b", fontWeight: 750, overflowWrap: "anywhere" },
-  primaryBtn: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    width: "100%",
-    minHeight: 54,
-    padding: "0 24px",
-    borderRadius: 999,
-    background: "#2a7b88",
-    color: "white",
-    fontWeight: 900,
-    fontSize: 17,
-    border: "none",
-    cursor: "pointer",
-    boxShadow: "0 10px 22px rgba(42,123,136,.26)",
-    textDecoration: "none",
-    marginTop: 4,
-  },
-  btnDisabled: { opacity: 0.6, cursor: "not-allowed" },
-  btnSpinner: {
-    width: 18,
-    height: 18,
-    border: "2px solid rgba(255,255,255,.4)",
-    borderTopColor: "white",
-    borderRadius: "50%",
-    display: "inline-block",
-    animation: "spin 0.7s linear infinite",
-  },
-  stripeNote: { textAlign: "center", fontSize: 12, color: "#94a3b8", marginTop: 10, marginBottom: 0 },
-  otherActions: { display: "flex", justifyContent: "center", gap: 16, marginTop: 18, flexWrap: "wrap" },
-  secondaryBtn: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    width: "100%",
-    minHeight: 48,
-    padding: "0 20px",
-    borderRadius: 999,
-    background: "white",
-    color: "#455a64",
-    fontWeight: 800,
-    fontSize: 15,
-    border: "1px solid #c9e2e8",
-    cursor: "pointer",
-  },
-  ghostBtn: {
-    background: "none",
-    border: "none",
-    color: "#647a82",
-    fontWeight: 750,
-    fontSize: 14,
-    cursor: "pointer",
-    textDecoration: "underline",
-    padding: "4px 0",
-  },
-  testingSection: { textAlign: "center", marginTop: 28, paddingTop: 20, borderTop: "1px dashed #e7f1f4" },
-  testingLink: {
-    background: "none",
-    border: "none",
-    color: "#94a3b8",
-    fontSize: 12,
-    cursor: "pointer",
-    textDecoration: "underline",
-    padding: 0,
-  },
-  actionsCol: { display: "flex", flexDirection: "column", gap: 12, alignItems: "stretch" },
-  cardTitle: { margin: "0 0 8px", fontSize: 24, fontWeight: 900, color: "#20343b", fontFamily: "Quicksand, sans-serif" },
-  cardSubtitle: { margin: 0, color: "#647a82", fontWeight: 700, lineHeight: 1.55 },
-};

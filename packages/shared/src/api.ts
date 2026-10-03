@@ -410,12 +410,16 @@ export const incidentApi = {
   },
   notifyParent(id: string | number) {
     return data<{ message: string }>(api.post(`/incidents/${id}/notify-parent`));
+  },
+  /** Existing PUT /incidents/{id} (staff, teacher, admin, manager). */
+  update(id: string | number, payload: { severity?: "low" | "medium" | "high"; status?: "draft" | "sent" | "resolved"; summary?: string; occurred_at?: string }) {
+    return data<{ incident: any }>(api.put(`/incidents/${id}`, payload));
   }
 };
 
 export const dailyNotesApi = {
-  list() {
-    return data<ListResponse<any, "daily_notes">>(api.get("/daily-notes"));
+  list(params?: { child_id?: string | number }) {
+    return data<ListResponse<any, "daily_notes">>(api.get("/daily-notes", { params }));
   },
   create(payload: { child_id: string | number; date?: string; note: string }) {
     return data<{ daily_note: any }>(api.post("/daily-notes", payload));

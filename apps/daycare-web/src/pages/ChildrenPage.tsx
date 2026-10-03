@@ -1,42 +1,60 @@
 import type { FormEvent } from "react";
-import { useState } from "react";
-import { childrenApi, classroomsApi, guardiansApi, getApiError, organizationApi } from "@barbaari/shared";
-import { PageHeader, Panel } from "../components/Page";
-import { DataTable } from "../components/DataTable";
-import { Badge, ErrorState, LoadingState } from "../components/Status";
-import { ErrorAlert, SuccessAlert } from "../components/Alerts";
-import { ChildSelect, ClassroomSelect, GuardianSelect } from "../components/Selects";
-import { Modal } from "../components/Modal";
+import { useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Baby, CaretRight, PlusCircle } from "@phosphor-icons/react";
+import { absenceApi, childrenApi, classroomsApi, getApiError, mergedAttendance, organizationApi } from "@barbaari/shared";
+import { Alert, Avatar, Drawer, EmptyState, ErrorState, Field, LoadingState, PageHeader, Pagination, SearchInput, Segmented, StatusBadge, recordTime, usePaged, useToast } from "@barbaari/shared/web/ui";
+import { attendanceStatuses } from "@barbaari/shared/web/status";
+import { ClassroomSelect } from "../components/Selects";
 import { useAsyncData } from "../hooks/useAsyncData";
-import { childCode, childDob, childLabel, friendlyError } from "../utils/labels";
+import { childCode, childGuardian, friendlyError } from "../utils/labels";
+import { ageLabel, todayStatusByChild } from "../utils/people";
 
 type ChildForm = { first_name: string; last_name: string; date_of_birth: string; classroom_id: string };
+type Filter = "all" | "present" | "expected" | "out" | "absent";
 
 const emptyForm: ChildForm = { first_name: "", last_name: "", date_of_birth: "", classroom_id: "" };
 
 export function ChildrenPage() {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [searchParams] = useSearchParams();
+  const today = new Date().toISOString().slice(0, 10);
   const { data, loading, error, reload } = useAsyncData(async () => {
-    const [children, classrooms, guardians, organization] = await Promise.all([childrenApi.managerList(), classroomsApi.list(), guardiansApi.list(), organizationApi.get()]);
-    return { children: children.children, classrooms: classrooms.classrooms, guardians: guardians.guardians, organization: organization.organization };
-  }, []);
+    const [children, classrooms, organization, attendance, absences] = await Promise.all([
+      childrenApi.managerList(),
+      classroomsApi.list(),
+      organizationApi.get(),
+      // Today's status only (plus open check-ins), not attendance history.
+      mergedAttendance([{ date: today }, { open: 1 }]),
+      absenceApi.list({ date: today })
+    ]);
+    return { children: children.children, classrooms: classrooms.classrooms, organization: organization.organization, attendance, absences: absences.absence_records ?? [] };
+  }, [today]);
   const [form, setForm] = useState<ChildForm>(emptyForm);
-  const [selectedChild, setSelectedChild] = useState<any | null>(null);
-  const [mode, setMode] = useState<"view" | "edit" | "assign" | "guardian" | null>(null);
-  const [classroomId, setClassroomId] = useState("");
-  const [guardianId, setGuardianId] = useState("");
-  const [success, setSuccess] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [created, setCreated] = useState<any | null>(null);
   const [actionError, setActionError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [roomId, setRoomId] = useState("");
+  const [query, setQuery] = useState(searchParams.get("q") ?? "");
 
-  async function runAction(action: () => Promise<void>, message: string) {
+  async function createChild(event: FormEvent) {
+    event.preventDefault();
     setSaving(true);
     setActionError("");
-    setSuccess("");
     try {
-      await action();
-      setSuccess(message);
-      setMode(null);
-      setSelectedChild(null);
+      const response = await childrenApi.create({
+        first_name: form.first_name,
+        last_name: form.last_name,
+        date_of_birth: form.date_of_birth || null,
+        classroom_id: form.classroom_id || null
+      });
+      setForm(emptyForm);
+      setCreating(false);
+      setCreated(response.child ?? null);
+      toast("Child created with an automatic child code.");
       await reload();
     } catch (err) {
       setActionError(friendlyError(getApiError(err).message));
@@ -45,98 +63,112 @@ export function ChildrenPage() {
     }
   }
 
-  async function createChild(event: FormEvent) {
-    event.preventDefault();
-    await runAction(async () => {
-      await childrenApi.create({
-        first_name: form.first_name,
-        last_name: form.last_name,
-        date_of_birth: form.date_of_birth || null,
-        classroom_id: form.classroom_id || null
-      });
-      setForm(emptyForm);
-    }, "Child created with an automatic child code.");
-  }
-
-  function openModal(nextMode: typeof mode, child: any) {
-    setSelectedChild(child);
-    setMode(nextMode);
-    setClassroomId(child.classroomId ? String(child.classroomId) : "");
-    setGuardianId("");
-    setActionError("");
-    if (nextMode === "edit") {
-      const [firstName, ...rest] = child.name.split(" ");
-      setForm({
-        first_name: child.firstName ?? firstName ?? "",
-        last_name: child.lastName ?? rest.join(" "),
-        date_of_birth: childDob(child) === "DOB not recorded" ? "" : childDob(child),
-        classroom_id: child.classroomId ? String(child.classroomId) : ""
-      });
-    }
-  }
-
-  const rows = data?.children ?? [];
-  const classrooms = data?.classrooms ?? [];
-  const guardians = data?.guardians ?? [];
+  const children = (data?.children ?? []) as any[];
+  const classrooms = (data?.classrooms ?? []) as any[];
   const isFamilyChildCare = data?.organization?.facility_type === "family_child_care";
+  const statusMap = useMemo(() => todayStatusByChild(data?.attendance ?? [], data?.absences ?? [], today), [data?.attendance, data?.absences, today]);
+  const statusOf = (child: any) => statusMap.get(String(child.id)) ?? { key: "not_checked_in" };
+  const bucket = (key: string): Filter => key === "checked_in" || key === "missing_checkout" ? "present" : key === "checked_out" || key === "checked_out_early" ? "out" : key === "absent" ? "absent" : "expected";
+  const counts = useMemo(() => {
+    const result = { all: children.length, present: 0, expected: 0, out: 0, absent: 0 };
+    for (const child of children) result[bucket(statusOf(child).key)] += 1;
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [children, statusMap]);
+
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return children.filter((child) => (filter === "all" || bucket(statusOf(child).key) === filter)
+      && (!roomId || String(child.classroomId) === roomId)
+      && (!q || `${child.name} ${childCode(child)} ${(child.guardianNames ?? []).join(" ")}`.toLowerCase().includes(q)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [children, filter, roomId, query, statusMap]);
+  const paged = usePaged(rows, 10, `${filter}|${roomId}|${query}`);
+
+  function statusLine(child: any) {
+    const status = statusOf(child);
+    if (status.record && (status.key === "checked_in")) return `In ${recordTime(status.record, "in")}`;
+    if (status.record && status.key === "missing_checkout") return `Open since ${recordTime(status.record, "in")}`;
+    if (status.record) return `Out ${recordTime(status.record, "out")}`;
+    if (status.absence) return status.absence.reason || String(status.absence.absenceType ?? status.absence.absence_type ?? "").replace(/_/g, " ");
+    return "";
+  }
 
   return (
-    <section className="page">
-      <PageHeader eyebrow="Enrollment" title="Children" />
-      <SuccessAlert message={success} />
-      <ErrorAlert message={actionError} />
+    <main className="bb-page">
+      <PageHeader
+        kicker={data ? `${children.length} enrolled${isFamilyChildCare ? "" : ` across ${classrooms.length} classroom${classrooms.length === 1 ? "" : "s"}`}` : "Enrollment"}
+        title="Children"
+        actions={<button className="bb-btn bb-btn-primary bb-btn-lg" onClick={() => { setForm(emptyForm); setActionError(""); setCreating(true); }}><PlusCircle />Add child</button>}
+      />
 
-      <Panel title="Create child">
-        <form className="form-grid" onSubmit={createChild}>
-          <input value={form.first_name} onChange={(event) => setForm({ ...form, first_name: event.target.value })} placeholder="First name" required />
-          <input value={form.last_name} onChange={(event) => setForm({ ...form, last_name: event.target.value })} placeholder="Last name" required />
-          <input type="date" value={form.date_of_birth} onChange={(event) => setForm({ ...form, date_of_birth: event.target.value })} aria-label="Date of birth" />
-          {!isFamilyChildCare ? <ClassroomSelect classrooms={classrooms} value={form.classroom_id} onChange={(id) => setForm({ ...form, classroom_id: id })} /> : <p className="muted">Family child care children are managed without classrooms.</p>}
-          <button className="primary" disabled={saving}>{saving ? "Saving..." : "Create child"}</button>
-        </form>
-      </Panel>
+      {created ? (
+        <Alert tone="ok" title={`${created.name} was added`} action={<button className="bb-btn bb-btn-primary" onClick={() => navigate(`/children/${created.id}`)}>Open record</button>}>
+          Child code {created.childCode ?? created.child_code} was created. Link a guardian so they can be checked in on the tablet.
+        </Alert>
+      ) : null}
 
-      {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : (
-        <DataTable rows={rows} columns={[
-          { header: "Child", render: (row: any) => <><strong>{row.name}</strong><br /><small>{childLabel(row)}</small></> },
-          { header: "Child code", render: (row: any) => <Badge>{childCode(row)}</Badge> },
-          { header: "DOB / age", render: (row: any) => <>{childDob(row)}<br /><small>{row.age}</small></> },
-          ...(!isFamilyChildCare ? [{ header: "Classroom", render: (row: any) => row.classroom }] : []),
-          { header: "Guardians", render: (row: any) => row.guardianNames?.join(", ") || "Not linked" },
-          { header: "Actions", render: (row: any) => <div className="row-actions"><button className="action-link" onClick={() => openModal("view", row)}>View</button><button className="action-link" onClick={() => openModal("edit", row)}>Edit</button>{!isFamilyChildCare ? <button className="action-link" onClick={() => openModal("assign", row)}>Assign classroom</button> : null}<button className="action-link" onClick={() => openModal("guardian", row)}>Link guardian</button><button className="action-link" onClick={() => runAction(() => childrenApi.update(row.id, { status: "archived" }).then(() => undefined), `${row.name} archived.`)}>Archive</button></div> }
-        ]} />
+      {loading && !data ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : !children.length ? (
+        <EmptyState icon={Baby} title="No children yet" action={<button className="bb-btn bb-btn-primary" onClick={() => setCreating(true)}><PlusCircle />Add child</button>}>
+          No children have been added to your daycare yet. Add a child and Barbaari will create their child code automatically.
+        </EmptyState>
+      ) : (
+        <>
+          <div className="bb-toolbar">
+            <Segmented label="Today" value={filter} onChange={setFilter} items={[
+              { key: "all", label: `All ${counts.all}` },
+              { key: "present", label: `Present ${counts.present}` },
+              { key: "expected", label: `Expected ${counts.expected}` },
+              { key: "out", label: `Checked out ${counts.out}` },
+              { key: "absent", label: `Absent ${counts.absent}` }
+            ]} />
+            {!isFamilyChildCare && classrooms.length ? (
+              <select className="bb-input" aria-label="Classroom" value={roomId} onChange={(event) => setRoomId(event.target.value)}>
+                <option value="">All classrooms</option>
+                {classrooms.map((room) => <option key={room.id} value={room.id}>{room.name}</option>)}
+              </select>
+            ) : null}
+            <span className="bb-grow" />
+            <SearchInput value={query} onChange={setQuery} placeholder="Name, child code or guardian" />
+          </div>
+
+          {rows.length ? (
+            <div className="bb-table-wrap">
+              <table className="bb-table">
+                <thead><tr><th>Child</th><th>Age</th>{!isFamilyChildCare ? <th>Classroom</th> : null}<th>Today</th><th>Primary guardian</th><th aria-label="Open" /></tr></thead>
+                <tbody>
+                  {paged.rows.map((child) => (
+                    <tr key={child.id} className="clickable" onClick={() => navigate(`/children/${child.id}`)}>
+                      <td><div className="bb-person"><Avatar name={child.name} seed={child.id} /><div><strong>{child.name}</strong><span>{childCode(child)}</span></div></div></td>
+                      <td>{ageLabel(child.dateOfBirth ?? child.date_of_birth, child.age)}</td>
+                      {!isFamilyChildCare ? <td>{child.classroom}</td> : null}
+                      <td><div className="bb-row" style={{ gap: 10, flexWrap: "nowrap" }}><StatusBadge map={attendanceStatuses} value={statusOf(child).key} /><span className="bb-caption">{statusLine(child)}</span></div></td>
+                      <td>{childGuardian(child)}</td>
+                      <td className="right"><a href={`/children/${child.id}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); navigate(`/children/${child.id}`); }} aria-label={`Open ${child.name}`}><CaretRight size={18} color="var(--bb-accent)" weight="fill" /></a></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <EmptyState compact title="No children match">Try a different filter, classroom or search.</EmptyState>}
+          <Pagination page={paged.page} pageCount={paged.pageCount} total={paged.total} pageSize={paged.pageSize} onChange={paged.setPage} />
+        </>
       )}
 
-      {selectedChild && mode ? (
-        <Modal title={`${mode === "view" ? "View" : mode === "edit" ? "Edit" : mode === "assign" ? "Assign classroom" : "Link guardian"}: ${selectedChild.name}`} onClose={() => setMode(null)}>
-          <div className="record-summary">
-            <strong>{selectedChild.name} - {childCode(selectedChild)}</strong>
-            <span>{childLabel(selectedChild)}</span>
-          </div>
-          {mode === "view" ? null : mode === "edit" ? (
-            <form className="form-grid" onSubmit={(event) => {
-              event.preventDefault();
-              void runAction(() => childrenApi.update(selectedChild.id, { ...form, classroom_id: form.classroom_id || null }).then(() => undefined), "Child updated.");
-            }}>
-              <input value={form.first_name} onChange={(event) => setForm({ ...form, first_name: event.target.value })} placeholder="First name" required />
-              <input value={form.last_name} onChange={(event) => setForm({ ...form, last_name: event.target.value })} placeholder="Last name" required />
-              <input type="date" value={form.date_of_birth} onChange={(event) => setForm({ ...form, date_of_birth: event.target.value })} />
-              {!isFamilyChildCare ? <ClassroomSelect classrooms={classrooms} value={form.classroom_id} onChange={(id) => setForm({ ...form, classroom_id: id })} /> : null}
-              <button className="primary" disabled={saving}>{saving ? "Saving..." : "Save child"}</button>
-            </form>
-          ) : mode === "assign" ? (
-            <div className="form-grid">
-              <ClassroomSelect classrooms={classrooms} value={classroomId} onChange={setClassroomId} />
-              <button className="primary" disabled={saving || !classroomId} onClick={() => runAction(() => childrenApi.assignClassroom(selectedChild.id, classroomId).then(() => undefined), "Classroom assigned.")}>Assign classroom</button>
+      {creating ? (
+        <Drawer title="Add a child" onClose={() => setCreating(false)} footer={<><button className="bb-btn bb-btn-secondary bb-btn-lg" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="bb-btn bb-btn-primary bb-btn-lg" form="create-child" disabled={saving}>{saving ? "Saving…" : "Add child"}</button></>}>
+          {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
+          <form id="create-child" className="bb-stack" onSubmit={createChild}>
+            <div className="bb-form-grid">
+              <Field label="First name"><input className="bb-input" value={form.first_name} onChange={(event) => setForm({ ...form, first_name: event.target.value })} required /></Field>
+              <Field label="Last name"><input className="bb-input" value={form.last_name} onChange={(event) => setForm({ ...form, last_name: event.target.value })} required /></Field>
             </div>
-          ) : (
-            <div className="form-grid">
-              <GuardianSelect guardians={guardians} value={guardianId} onChange={setGuardianId} />
-              <button className="primary" disabled={saving || !guardianId} onClick={() => runAction(() => childrenApi.linkGuardian(selectedChild.id, { guardian_id: guardianId, pickup_authorized: true }).then(() => undefined), "Guardian linked to child.")}>Link guardian</button>
-            </div>
-          )}
-        </Modal>
+            <Field label="Date of birth"><input className="bb-input" type="date" value={form.date_of_birth} onChange={(event) => setForm({ ...form, date_of_birth: event.target.value })} /></Field>
+            {!isFamilyChildCare ? <ClassroomSelect classrooms={classrooms} value={form.classroom_id} onChange={(id) => setForm({ ...form, classroom_id: id })} label="Classroom" /> : <p className="bb-muted">Family child care children are managed without classrooms.</p>}
+            <p className="bb-caption">Barbaari creates the child code automatically.</p>
+          </form>
+        </Drawer>
       ) : null}
-    </section>
+    </main>
   );
 }

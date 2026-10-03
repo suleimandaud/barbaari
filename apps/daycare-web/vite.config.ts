@@ -9,6 +9,8 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     resolve: {
       alias: {
+        // Must precede the general alias: string aliases match by prefix, first match wins.
+        "@barbaari/shared/web": path.resolve(__dirname, "../../packages/shared/web"),
         "@barbaari/shared": path.resolve(__dirname, "../../packages/shared/src")
       }
     },

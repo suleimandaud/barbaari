@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
+import { ArrowLeft, Check, CheckSquare, IdentificationBadge, LockSimple, MinusCircle, SignIn, SignOut } from "@phosphor-icons/react";
 import { authApi, getApiError, tabletApi } from "@barbaari/shared";
-import { ErrorAlert, SuccessAlert } from "../components/Alerts";
-import { Badge } from "../components/Status";
+import { Alert, Avatar, EmptyState, Field, LogoTile, PasswordInput, PinPad, SearchInput, Segmented, StatusBadge } from "@barbaari/shared/web/ui";
+import { attendanceStatuses } from "@barbaari/shared/web/status";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 
 type Mode = "guardian" | "staff" | "admin";
@@ -76,6 +77,8 @@ export function TabletPortalPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [unlockWithPassword, setUnlockWithPassword] = useState(false);
+  const [childSearch, setChildSearch] = useState("");
 
   const usesClassrooms = Boolean(data?.uses_classrooms);
   const selectedChild = useMemo(() => (data?.children ?? []).find((child: any) => String(child.id) === String(childId)), [data, childId]);
@@ -263,140 +266,171 @@ export function TabletPortalPage() {
     setStep(data?.uses_classrooms ? "classroom" : "child");
   }
 
-  return (
-    <main className="tablet-portal">
-      <section className="tablet-shell">
-        <header className="tablet-header">
+  const orgName = data?.organization?.name ?? session?.user?.organization?.name ?? "";
+  const stepIndex = step === "classroom" || step === "child" ? 0 : step === "action" ? 1 : step === "signer" || step === "pin" ? 2 : step === "signature" ? 3 : 4;
+  const back: Partial<Record<Step, Step>> = { child: usesClassrooms ? "classroom" : undefined, action: "child", signer: "action", pin: "signer", signature: "pin" };
+  const firstName = (name?: string) => String(name ?? "").split(" ")[0];
+  const offline = !isOnline ? <Alert tone="info">You’re offline. Attendance actions require a connection — reconnect before checking children in or out.</Alert> : null;
+
+  if (step === "unlock") {
+    return (
+      <main className="bb-unlock">
+        <section className="bb-unlock-brand">
+          <LogoTile size={120} />
           <div>
-            <span>Barbaari Attendance</span>
-            <h1>{data?.organization?.name ?? session?.user?.organization?.name ?? "Tablet / Kiosk"}</h1>
-            <p>{data ? `${data.facility_type === "family_child_care" ? "Family Child Care" : "Center Daycare"} · ${modeLabel(mode)} · ${data.scopeLabel}` : "Unlock this provider account before attendance records load."}</p>
+            <p>Barbaari attendance{orgName ? ` · ${orgName}` : ""}</p>
+            <h1>Tablet mode is locked</h1>
+            <p>Parents and guardians: please ask a staff member to open the tablet. You’ll sign with your own PIN.</p>
           </div>
-          {session ? <button className="secondary" onClick={() => reset(true)}>Lock tablet</button> : null}
+        </section>
+        <section className="bb-unlock-form">
+          <form className="bb-stack" style={{ width: "min(100%, 360px)", gap: 20 }} onSubmit={(event) => { event.preventDefault(); if (email && credential) void unlock(); }}>
+            <h2 style={{ textAlign: "center", fontSize: 26 }}>{unlockWithPassword ? "Staff sign-in" : "Staff PIN"}</h2>
+            <p className="bb-caption" style={{ textAlign: "center", fontSize: 15, marginTop: -12 }}>Staff, teacher, owner or admin accounts only.</p>
+            {offline}
+            {error ? <Alert tone="danger">{error}</Alert> : null}
+            <Field label="Email" htmlFor="unlock-email"><input id="unlock-email" className="bb-input bb-kiosk-input" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
+            {unlockWithPassword
+              ? <Field label="Password" htmlFor="unlock-password"><PasswordInput id="unlock-password" value={credential} onChange={setCredential} autoComplete="current-password" /></Field>
+              : <PinPad value={credential} onChange={(value) => setCredential(value.replace(/\D/g, ""))} label="Enter your PIN to unlock" length={Math.max(4, credential.length)} />}
+            <button className="bb-btn bb-btn-primary bb-btn-touch bb-btn-block" disabled={saving || !email || !credential}>{saving ? "Unlocking…" : "Unlock tablet"}</button>
+            <button type="button" className="bb-btn bb-btn-ghost" onClick={() => { setUnlockWithPassword((current) => !current); setCredential(""); }}>{unlockWithPassword ? "Use tablet PIN instead" : "Sign in with password instead"}</button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  if (step === "confirmation") {
+    return (
+      <main className="bb-kiosk" style={{ position: "static", minHeight: "100dvh" }}>
+        <section className="bb-kiosk-done" style={{ minHeight: "100dvh" }}>
+          <span className="bb-kiosk-check"><Check weight="bold" size={78} /></span>
+          <h1>{selectedAction === "absence" ? "Absence recorded" : `${firstName(selectedChild?.name) || "Child"} is checked ${selectedAction === "check_in" ? "in" : "out"}`}</h1>
+          <p className="lead">{message}</p>
+          <div className="bb-row" style={{ justifyContent: "center" }}>
+            <button className="bb-btn bb-kiosk-light" onClick={() => reset(false)}>Next child</button>
+            <button className="bb-btn bb-kiosk-ghost" onClick={() => reset(true)}>Lock tablet</button>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="bb-kiosk" style={{ position: "static", minHeight: "100dvh" }}>
+      <div className="bb-kiosk-body">
+        <header className="bb-kiosk-top">
+          {back[step] ? <button className="bb-btn bb-btn-secondary bb-kiosk-btn" onClick={() => { setError(""); setStep(back[step]!); }}><ArrowLeft size={22} />Back</button>
+            : <div className="bb-gate-brand"><LogoTile /><strong>Tablet mode</strong><span>{orgName}{data?.scopeLabel ? ` · ${data.scopeLabel}` : ""}</span></div>}
+          <span className="bb-kiosk-steps">{["Child", "Action", "Signer", "Sign", "Done"].map((label, index) => <span key={label}>{index ? " · " : ""}{index === stepIndex ? <b>{label}</b> : label}</span>)}</span>
+          <button className="bb-btn bb-btn-secondary bb-kiosk-btn" onClick={() => reset(true)}><LockSimple size={22} />Lock tablet</button>
         </header>
-
-        {!isOnline ? <div className="alert-banner warning">You're offline. Attendance actions require a connection — reconnect before checking children in or out.</div> : null}
-        <SuccessAlert message={message} />
-        <ErrorAlert message={error} />
-
-        {step === "unlock" ? (
-          <section className="kiosk-card">
-            <h2>Unlock tablet</h2>
-            <p className="muted">Enter an active provider staff, teacher, owner, or admin account. Guardians are selected later as attendance signers and verify with their tablet PIN.</p>
-            <div className="form-grid two">
-              <label className="field-stack"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-              <label className="field-stack"><span>Password or tablet PIN</span><input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /></label>
-              <button className="primary full" disabled={saving || !email || !credential} onClick={unlock}>{saving ? "Unlocking..." : "Unlock tablet"}</button>
-            </div>
-          </section>
-        ) : null}
+        {offline}
+        {message && step !== "signature" ? <Alert tone="ok">{message}</Alert> : null}
+        {error ? <Alert tone="danger" title="That didn’t work">{error}</Alert> : null}
 
         {step === "classroom" && data ? (
-          <section className="kiosk-card">
-            <h2>Select classroom</h2>
-            <div className="kiosk-choice-grid">
-              {(data.classrooms ?? []).map((room: any) => (
-                <button key={room.id} className="kiosk-choice" onClick={() => { setClassroomId(String(room.id)); setStep("child"); }}>
-                  {room.name}
-                  <small>{room.children_count ?? room.childrenCount ?? 0} visible children</small>
-                </button>
-              ))}
-            </div>
-            {(data.classrooms ?? []).length === 0 ? <p className="muted">No classrooms are available for this account.</p> : null}
+          <section>
+            <h2 className="bb-kiosk-title">Choose a classroom</h2>
+            {(data.classrooms ?? []).length ? (
+              <div className="bb-kiosk-grid">
+                {(data.classrooms ?? []).map((room: any) => (
+                  <button key={room.id} className="bb-kiosk-tile" onClick={() => { setClassroomId(String(room.id)); setStep("child"); }}>
+                    <strong>{room.name}</strong>
+                    <span className="bb-caption" style={{ fontSize: 16 }}>{room.children_count ?? room.childrenCount ?? 0} children</span>
+                  </button>
+                ))}
+              </div>
+            ) : <EmptyState title="No classrooms">No classrooms are available for this account.</EmptyState>}
           </section>
         ) : null}
 
-        {step === "child" && data ? (
-          <section className="kiosk-card">
-            <h2>Select child</h2>
-            {!usesClassrooms ? <Badge>Family child care: start from children</Badge> : null}
-            <div className="kiosk-choice-grid children">
-              {visibleChildren.map((child: any) => (
-                <button key={child.id} className="kiosk-choice" onClick={() => chooseChild(child)}>
-                  {child.name}
-                  <small>{child.childCode ?? child.child_code} · {child.classroom ?? "Family child care"} · {child.attendanceStatus}</small>
-                </button>
-              ))}
-            </div>
-            {visibleChildren.length === 0 ? <p className="muted">No children are visible for this tablet account.</p> : null}
-            <div className="kiosk-actions">{usesClassrooms ? <button className="secondary" onClick={() => setStep("classroom")}>Back to classrooms</button> : null}</div>
-          </section>
-        ) : null}
+        {step === "child" && data ? (() => {
+          const query = childSearch.trim().toLowerCase();
+          const list = visibleChildren.filter((child: any) => !query || String(child.name).toLowerCase().includes(query));
+          return (
+            <section>
+              <h2 className="bb-kiosk-title">Who’s arriving or leaving?</h2>
+              <div className="bb-kiosk-filter"><SearchInput white value={childSearch} onChange={setChildSearch} placeholder="Search by child’s name" /></div>
+              {list.length ? (
+                <div className="bb-kiosk-grid">
+                  {list.map((child: any) => (
+                    <button key={child.id} className="bb-kiosk-tile" onClick={() => chooseChild(child)}>
+                      <Avatar name={child.name} seed={child.id} size={56} />
+                      <strong>{child.name}</strong>
+                      <StatusBadge map={attendanceStatuses} value={child.attendanceStatus ?? "not_checked_in"} />
+                    </button>
+                  ))}
+                </div>
+              ) : <EmptyState title={query ? "No child found" : "No children"}>{query ? "Check the spelling and try again." : "No children are visible for this tablet account."}</EmptyState>}
+            </section>
+          );
+        })() : null}
 
         {step === "action" && selectedChild ? (
-          <section className="kiosk-card">
-            <h2>{selectedChild.name}</h2>
-            <p className="muted">{selectedChild.childCode ?? selectedChild.child_code} · {selectedChild.classroom ?? "Family child care"} · {selectedChild.attendanceStatus}</p>
-            <div className="kiosk-choice-grid">
-              <button className="kiosk-choice selected" disabled={saving} onClick={() => chooseAction("check_in")}>Check-in<small>Verify signer PIN, capture signature, then save.</small></button>
-              <button className="kiosk-choice" disabled={saving} onClick={() => chooseAction("check_out")}>Check-out<small>Verify signer PIN, capture signature, then save.</small></button>
-              <button className="kiosk-choice" disabled={saving} onClick={() => chooseAction("absence")}>Absence<small>Record absence type with signer PIN and signature.</small></button>
+          <section>
+            <div className="bb-kiosk-child">
+              <Avatar name={selectedChild.name} seed={selectedChild.id} size={112} />
+              <div>
+                <h2>{selectedChild.name}</h2>
+                <p>{[selectedChild.childCode ?? selectedChild.child_code, selectedChild.classroom ?? "Family child care"].filter(Boolean).join(" · ")}</p>
+                <StatusBadge size="lg" map={attendanceStatuses} value={selectedChild.attendanceStatus ?? "not_checked_in"} />
+              </div>
             </div>
-            <div className="kiosk-actions"><button className="secondary" onClick={() => setStep("child")}>Back to children</button></div>
+            <div className="bb-kiosk-actions" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+              <button className="bb-kiosk-action primary" disabled={saving} onClick={() => chooseAction("check_in")}><SignIn size={46} />Check in</button>
+              <button className="bb-kiosk-action" disabled={saving} onClick={() => chooseAction("check_out")}><SignOut size={46} />Check out</button>
+              <button className="bb-kiosk-action" disabled={saving} onClick={() => chooseAction("absence")}><MinusCircle size={40} />Mark absent</button>
+            </div>
           </section>
         ) : null}
 
         {step === "signer" && selectedChild ? (
-          <section className="kiosk-card">
-            <h2>Select signer</h2>
-            <p className="muted">{actionLabel(selectedAction)} for {selectedChild.name}</p>
-            <div className="kiosk-choice-grid">
+          <section style={{ maxWidth: 760 }}>
+            <h2 className="bb-kiosk-title">{selectedAction === "absence" ? `Who is reporting ${firstName(selectedChild.name)}’s absence?` : `Who is ${selectedAction === "check_in" ? "dropping" : "picking"} ${firstName(selectedChild.name)} ${selectedAction === "check_in" ? "off" : "up"}?`}</h2>
+            <div className="bb-stack" style={{ gap: 12 }}>
               {signers.map((signer) => (
-                <button key={`${signer.type}-${signer.id}`} className={`kiosk-choice ${String(signerId) === String(signer.id) ? "selected" : ""}`} onClick={() => { setSignerId(String(signer.id)); continueToPin(signer); }}>
-                  {signer.name}
-                  <small>{signer.relationship ?? signer.type} · {signer.pin_configured ? "PIN configured" : "PIN missing"}</small>
+                <button key={`${signer.type}-${signer.id}`} className={`bb-signer${signer.type === "guardian" ? "" : " outline"}${String(signerId) === String(signer.id) ? " on" : ""}`} onClick={() => { setSignerId(String(signer.id)); continueToPin(signer); }}>
+                  {signer.type === "guardian" ? <Avatar name={signer.name} seed={`${signer.type}-${signer.id}`} size={56} /> : <IdentificationBadge size={36} color="var(--bb-accent)" />}
+                  <div><strong>{signer.name}</strong><span>{signer.relationship ?? signer.type} · {signer.pin_configured ? "PIN set" : "PIN missing — set one first"}</span></div>
                 </button>
               ))}
             </div>
-            {signers.length === 0 ? <p className="muted">No authorized signers are available for this child.</p> : null}
-            <div className="kiosk-actions"><button className="secondary" onClick={() => setStep("action")}>Back to actions</button></div>
+            {signers.length === 0 ? <EmptyState compact title="No signers">No authorized signers are available for this child.</EmptyState> : null}
           </section>
         ) : null}
 
         {step === "pin" && selectedChild && selectedSigner ? (
-          <section className="kiosk-card">
-            <h2>Enter signer PIN</h2>
-            <p className="muted">{selectedSigner.name} is signing {actionLabel(selectedAction).toLowerCase()} for {selectedChild.name}.</p>
-            <label className="kiosk-input"><span>Signer PIN</span><input type="password" inputMode="numeric" value={pin} onChange={(event) => setPin(event.target.value)} /></label>
-            <div className="kiosk-actions">
-              <button className="secondary" onClick={() => setStep("signer")}>Back to signers</button>
-              <button className="primary" disabled={saving || !pin} onClick={verifyPin}>{saving ? "Verifying..." : "Verify PIN"}</button>
+          <section className="bb-kiosk-split">
+            <div>
+              <h2 className="bb-kiosk-title">{selectedSigner.name}, enter your PIN</h2>
+              <p className="bb-kiosk-meta">Signing {actionLabel(selectedAction).toLowerCase()} for {selectedChild.name}.</p>
+            </div>
+            <div>
+              <PinPad value={pin} onChange={setPin} label="Signer PIN" length={Math.max(4, pin.length)} />
+              <button className="bb-btn bb-btn-primary bb-btn-touch bb-btn-block" style={{ marginTop: 30 }} disabled={saving || pin.length < 4} onClick={verifyPin}>{saving ? "Verifying…" : "Verify PIN"}</button>
             </div>
           </section>
         ) : null}
 
         {step === "signature" && selectedChild && selectedSigner ? (
-          <section className="kiosk-card">
-            <h2>Capture signature</h2>
-            <p className="muted">{selectedSigner.name} confirmed by PIN. Signature is required before saving {actionLabel(selectedAction).toLowerCase()}.</p>
-            {selectedAction === "absence" ? (
-              <div className="form-grid two">
-                <label className="field-stack"><span>Absence type</span><select value={absenceType} onChange={(event) => setAbsenceType(event.target.value)}>{absenceTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-                <label className="field-stack"><span>Reason optional</span><input value={absenceReason} onChange={(event) => setAbsenceReason(event.target.value)} /></label>
-              </div>
-            ) : null}
-            <div className="signature-pad">
-              <div>
-                <strong>{selectedChild.name}</strong>
-                <span>{actionLabel(selectedAction)}</span>
-              </div>
-              <label className="kiosk-input"><span>Signer name / signature</span><input value={signatureName} onChange={(event) => setSignatureName(event.target.value)} /></label>
-            </div>
-            <div className="kiosk-actions">
-              <button className="secondary" onClick={() => setStep("pin")}>Back to PIN</button>
-              <button className="primary" disabled={saving || !signatureName} onClick={submitAction}>{saving ? "Saving..." : "Submit attendance"}</button>
+          <section style={{ maxWidth: 760 }}>
+            <h2 className="bb-kiosk-title" style={{ marginBottom: 8 }}>{selectedAction === "absence" ? `Mark ${firstName(selectedChild.name)} absent today` : `Sign to check ${selectedAction === "check_in" ? "in" : "out"} ${firstName(selectedChild.name)}`}</h2>
+            <p className="bb-kiosk-meta">{selectedSigner.name} confirmed by PIN · {new Date().toLocaleString(undefined, { weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit" })}</p>
+            <div className="bb-stack">
+              {selectedAction === "absence" ? (
+                <>
+                  <Segmented touch label="Absence type" value={absenceType} onChange={setAbsenceType} items={absenceTypes.map(([value, label]) => ({ key: value, label }))} />
+                  <Field label="Reason (optional)"><input className="bb-input white bb-kiosk-input" value={absenceReason} onChange={(event) => setAbsenceReason(event.target.value)} placeholder="Sick, vacation, appointment…" /></Field>
+                </>
+              ) : null}
+              <Field label="Signer name / signature"><input className="bb-input white bb-kiosk-input" value={signatureName} onChange={(event) => setSignatureName(event.target.value)} placeholder="Full name" /></Field>
+              <button className="bb-btn bb-btn-primary bb-btn-touch" disabled={saving || !signatureName} onClick={submitAction}><CheckSquare size={26} />{saving ? "Saving…" : selectedAction === "absence" ? "Record absence" : `Confirm check-${selectedAction === "check_in" ? "in" : "out"}`}</button>
             </div>
           </section>
         ) : null}
-
-        {step === "confirmation" ? (
-          <section className="kiosk-card confirmation">
-            <h2>Done</h2>
-            <p>{message}</p>
-            <button className="primary" onClick={() => reset(false)}>Start new action</button>
-          </section>
-        ) : null}
-      </section>
+      </div>
     </main>
   );
 }

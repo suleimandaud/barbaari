@@ -86,7 +86,7 @@ export function RegistrationApplicationsPage() {
   const rejected = rows.filter((application: any) => application.status === "rejected").length;
 
   return (
-    <section className="page">
+    <section className="bb-page">
       <Header eyebrow="Provider onboarding" title="Registration Applications" />
       <Alert message={success} />
       <Alert message={actionError} tone="danger" />

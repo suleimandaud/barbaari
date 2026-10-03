@@ -1,18 +1,13 @@
 import { useState } from "react";
 import { daycarePlatformBillingApi, getApiError } from "@barbaari/shared";
-import { API_BASE_URL } from "@barbaari/shared";
-import { DataTable } from "../components/DataTable";
-import { PageHeader, Panel } from "../components/Page";
-import { Badge, ErrorState, LoadingState } from "../components/Status";
+import { DownloadSimple, WarningCircle } from "@phosphor-icons/react";
+import { Alert, ErrorState, LoadingState, PageHeader, StatusBadge, money, shortDate } from "@barbaari/shared/web/ui";
+import { invoiceStatuses, subscriptionStatuses } from "@barbaari/shared/web/status";
 import { useAsyncData } from "../hooks/useAsyncData";
 
-function money(value: unknown, currency = "USD") {
-  return `${currency} $${Number(value ?? 0).toFixed(2)}`;
-}
-
-function dateShort(value?: string | null) {
-  if (!value) return "n/a";
-  return new Intl.DateTimeFormat("en", { month: "short", day: "2-digit", year: "numeric" }).format(new Date(value));
+function dateShort(value?: string | null, withYear = false) {
+  if (!value) return "—";
+  return shortDate(value, withYear ? { day: "numeric", month: "short", year: "numeric" } : { day: "numeric", month: "short" });
 }
 
 function titleize(value?: string | null) {
@@ -44,8 +39,22 @@ export function SubscriptionBillingPage() {
     finally { setCancelling(false); setCancelConfirm(false); }
   }
 
-  function downloadPdf(invoiceId: string) {
-    window.open(`${API_BASE_URL}/daycare/billing/invoices/${invoiceId}/pdf`, "_blank");
+  // The PDF endpoint needs the bearer token, so fetch it through the API client and save the blob.
+  async function downloadPdf(invoice: any) {
+    setActionError("");
+    try {
+      const response = await daycarePlatformBillingApi.downloadInvoicePdf(invoice.id);
+      const url = URL.createObjectURL(response.data as Blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${invoice.invoice_number ?? `invoice-${invoice.id}`}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setActionError(getApiError(err).message);
+    }
   }
 
   async function requestPlanChange() {
@@ -77,79 +86,128 @@ export function SubscriptionBillingPage() {
     }
   }
 
-  if (loading) return <LoadingState label="Loading subscription billing..." />;
-  if (error) return <ErrorState message={error} onRetry={reload} />;
+  if (loading && !data) return <main className="bb-page"><LoadingState label="Loading subscription billing" /></main>;
+  if (error) return <main className="bb-page"><ErrorState message={error} onRetry={reload} /></main>;
 
   const subscription = data?.subscription.subscription;
   const plan = subscription?.pricing_plan;
+  const currency = plan?.currency ?? "USD";
   const openBalance = Number(data?.subscription.open_balance ?? 0);
   const status = subscription?.status ?? "not configured";
+  const invoices = (data?.invoices ?? []) as any[];
+  const openInvoices = invoices.filter((invoice) => Number(invoice.balance_due ?? 0) > 0);
+  const oldestOpen = [...openInvoices].sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)))[0];
   const warning = status === "suspended"
     ? "Your organization subscription is suspended. Contact platform admin."
     : openBalance > 0 || ["past_due", "suspended"].includes(status)
-      ? "Your Barbaari subscription has an unpaid or overdue balance."
+      ? `You have an unpaid balance of ${money(openBalance, currency)}`
       : "";
+  const limit = (value: unknown, noun: string) => value ? `Up to ${value} ${noun}` : `Unlimited ${noun}`;
 
-  return <section className="page">
-    <PageHeader eyebrow="Platform Subscription" title="Subscription / Billing" description="View your daycare organization’s Barbaari platform subscription, invoices, and payment history." />
-    {warning ? <div className={`alert ${status === "suspended" ? "danger" : "warning"}`}>{warning}</div> : null}
-    {message ? <div className="alert success">{message}</div> : null}
-    {actionError ? <div className="alert danger">{actionError}</div> : null}
+  return (
+    <main className="bb-page">
+      <PageHeader kicker="Your Barbaari plan, invoices and payments" title="Subscription" />
+      {warning ? (
+        <Alert tone="danger" icon={WarningCircle} title={warning} action={status !== "suspended" ? <button className="bb-btn bb-btn-primary" onClick={payInvoicePlaceholder}>Pay now</button> : undefined}>
+          {status === "suspended" ? null : oldestOpen ? `Pay invoice ${oldestOpen.invoice_number} to keep tablet mode and attendance running without interruption.` : "Your Barbaari subscription has an unpaid or overdue balance."}
+        </Alert>
+      ) : null}
+      {message ? <Alert tone="ok">{message}</Alert> : null}
+      {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
 
-    <div className="metrics">
-      <article className="metric primary"><span>Current plan</span><strong>{plan?.name ?? "No plan"}</strong><small>{titleize(subscription?.billing_cycle)} billing</small></article>
-      <article className={`metric ${status === "active" ? "secondary" : "danger"}`}><span>Status</span><strong>{titleize(status)}</strong><small>Provider: {titleize(subscription?.provider ?? "manual")}</small></article>
-      <article className="metric tertiary"><span>Open balance</span><strong>{money(openBalance, plan?.currency ?? "USD")}</strong><small>Platform invoices only</small></article>
-      <article className="metric primary"><span>Next invoice</span><strong>{dateShort(subscription?.next_invoice_at)}</strong><small>Stripe mode: {data?.subscription.stripe_mode ?? "test"}</small></article>
-    </div>
-
-    <Panel title="Plan limits and features" action={<button className="secondary" onClick={requestPlanChange}>Request plan change</button>}>
-      <div className="grid three">
-        <div><strong>{plan?.child_limit ?? "Unlimited"}</strong><br /><small>Children</small></div>
-        <div><strong>{plan?.staff_limit ?? "Unlimited"}</strong><br /><small>Staff</small></div>
-        <div><strong>{plan?.device_limit ?? "Unlimited"}</strong><br /><small>Tablet devices</small></div>
+      <div className="bb-sub-summary">
+        <div>
+          <p className="bb-overline">Current plan</p>
+          <strong className="bb-sub-plan">{plan?.name ?? "No plan"}{subscription?.billing_cycle ? ` · ${titleize(subscription.billing_cycle).toLowerCase()}` : ""}</strong>
+          <div className="bb-row" style={{ gap: 10 }}><StatusBadge size="sm" map={subscriptionStatuses} value={status} /><span className="bb-caption">{subscription?.provider === "stripe" ? "Paid by card through Stripe" : `Provider: ${titleize(subscription?.provider ?? "manual")}`}</span></div>
+        </div>
+        <div>
+          <p className="bb-overline">Open balance</p>
+          <strong className={`bb-sub-figure${openBalance > 0 ? " danger" : ""}`}>{money(openBalance, currency)}</strong>
+          <span className="bb-caption">{openInvoices.length ? `Across ${openInvoices.length} invoice${openInvoices.length === 1 ? "" : "s"}` : "Platform invoices only"}</span>
+        </div>
+        <div>
+          <p className="bb-overline">Next invoice</p>
+          <strong className="bb-sub-figure">{dateShort(subscription?.next_invoice_at ?? subscription?.current_period_end)}</strong>
+          <span className="bb-caption">{plan ? money(subscription?.billing_cycle === "yearly" ? plan.yearly_price : plan.monthly_price, currency) : ""}{data?.subscription.stripe_mode ? ` · Stripe ${data.subscription.stripe_mode} mode` : ""}</span>
+        </div>
+        <div>
+          <p className="bb-overline">Plan limits</p>
+          <ul className="bb-sub-limits">
+            <li>{limit(plan?.child_limit, "children")}</li>
+            <li>{limit(plan?.staff_limit, "staff")}</li>
+            <li>{limit(plan?.device_limit, "tablets")}</li>
+          </ul>
+        </div>
       </div>
-      <div className="feature-list">{(plan?.features ?? []).map((feature: string) => <Badge key={feature}>{titleize(feature)}</Badge>)}</div>
-    </Panel>
+      {(plan?.features ?? []).length ? <div className="bb-row" style={{ gap: 8, marginBottom: 40 }}>{(plan?.features ?? []).map((feature: string) => <span key={feature} className="bb-tag accent">{titleize(feature)}</span>)}</div> : null}
 
-    {subscription?.cancel_at_period_end ? (
-      <div className="alert warning">Subscription cancellation scheduled. Access ends on {dateShort(subscription?.current_period_end)}.</div>
-    ) : status === "active" && (
-      <Panel title="Manage subscription">
-        {!cancelConfirm ? (
-          <button className="secondary" onClick={() => setCancelConfirm(true)}>Cancel subscription</button>
-        ) : (
-          <div className="settings-stack">
-            <p className="muted">Are you sure? Your access will continue until the end of the current billing period.</p>
-            <div className="actions">
-              <button className="secondary" disabled={cancelling} onClick={cancelSubscription}>{cancelling ? "Cancelling..." : "Yes, cancel at period end"}</button>
-              <button className="secondary" disabled={cancelling} onClick={() => setCancelConfirm(false)}>Keep subscription</button>
-            </div>
+      <section className="bb-section" style={{ marginBottom: 40 }}>
+        <div className="bb-row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+          <h2 style={{ fontSize: 26 }}>Invoices</h2>
+          <button className="bb-btn bb-btn-ghost" onClick={requestPlanChange}>Request plan change</button>
+        </div>
+        {invoices.length ? (
+          <div className="bb-table-wrap">
+            <table className="bb-table">
+              <thead><tr><th>Invoice</th><th>Period</th><th>Due</th><th className="right">Total</th><th className="right">Paid</th><th className="right">Balance</th><th>Status</th><th className="right">PDF</th></tr></thead>
+              <tbody>
+                {invoices.map((row) => (
+                  <tr key={row.id}>
+                    <td className="strong" style={{ whiteSpace: "nowrap" }}>{row.invoice_number}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{dateShort(row.billing_period_start)} – {dateShort(row.billing_period_end, true)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{dateShort(row.due_date)}</td>
+                    <td className="right bb-num">{money(row.total_amount, row.currency)}</td>
+                    <td className="right bb-num">{money(row.amount_paid, row.currency)}</td>
+                    <td className="right bb-num strong">{money(row.balance_due, row.currency)}</td>
+                    <td><StatusBadge size="sm" map={invoiceStatuses} value={row.status} /></td>
+                    <td className="right"><button className="bb-btn bb-btn-ghost bb-btn-icon" aria-label={`Download ${row.invoice_number} PDF`} onClick={() => downloadPdf(row)}><DownloadSimple size={20} /></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        )}
-      </Panel>
-    )}
-    <Panel title="Platform invoices" action={<button className="primary" onClick={payInvoicePlaceholder}>Pay Invoice</button>}>
-      <DataTable rows={data?.invoices ?? []} columns={[
-        { header: "Invoice", render: (row: any) => row.invoice_number },
-        { header: "Period", render: (row: any) => `${dateShort(row.billing_period_start)} - ${dateShort(row.billing_period_end)}` },
-        { header: "Due", render: (row: any) => dateShort(row.due_date) },
-        { header: "Total", render: (row: any) => money(row.total_amount, row.currency) },
-        { header: "Paid", render: (row: any) => money(row.amount_paid, row.currency) },
-        { header: "Balance", render: (row: any) => money(row.balance_due, row.currency) },
-        { header: "Status", render: (row: any) => <Badge tone={row.status === "paid" ? "success" : row.status === "overdue" ? "danger" : "warning"}>{titleize(row.status)}</Badge> },
-        { header: "PDF", render: (row: any) => <button className="action-link" onClick={() => downloadPdf(row.id)}>Download</button> }
-      ]} />
-    </Panel>
+        ) : <p className="bb-muted">No platform invoices yet.</p>}
+        {openBalance > 0 && status !== "suspended" ? <div style={{ marginTop: 15 }}><button className="bb-btn bb-btn-primary" onClick={payInvoicePlaceholder}>Pay invoice</button></div> : null}
+      </section>
 
-    <Panel title="Payment history">
-      <DataTable rows={data?.payments ?? []} columns={[
-        { header: "Invoice", render: (row: any) => row.invoice_number ?? row.invoice_id },
-        { header: "Amount", render: (row: any) => money(row.amount, row.currency) },
-        { header: "Method", render: (row: any) => <Badge>{titleize(row.method)}</Badge> },
-        { header: "Reference", render: (row: any) => row.reference ?? "Manual" },
-        { header: "Paid", render: (row: any) => dateShort(row.paid_at) }
-      ]} />
-    </Panel>
-  </section>;
+      <div className="bb-grid-main-side" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(260px, 340px)" }}>
+        <section>
+          <h2 style={{ fontSize: 26, marginBottom: 10 }}>Payment history</h2>
+          {(data?.payments ?? []).length ? (
+            <div className="bb-list">
+              {(data?.payments ?? []).map((row: any) => (
+                <div className="bb-list-row" key={row.id}>
+                  <span className="bb-caption" style={{ width: 70, flex: "none" }}>{dateShort(row.paid_at)}</span>
+                  <span className="grow">{[row.invoice_number ?? row.invoice_id, titleize(row.method), row.reference ?? "Manual"].filter(Boolean).join(" · ")}</span>
+                  <strong className="bb-num">{money(row.amount, row.currency)}</strong>
+                </div>
+              ))}
+            </div>
+          ) : <p className="bb-muted">No payments yet.</p>}
+        </section>
+        <section>
+          <h2 style={{ fontSize: 26, marginBottom: 10 }}>Manage</h2>
+          {subscription?.cancel_at_period_end ? (
+            <Alert tone="warn">Subscription cancellation scheduled. Access ends on {dateShort(subscription?.current_period_end, true)}.</Alert>
+          ) : status === "active" ? (
+            !cancelConfirm ? (
+              <>
+                <p style={{ marginBottom: 12 }}>If you cancel, access continues until the end of the current billing period.</p>
+                <button className="bb-btn bb-btn-secondary" onClick={() => setCancelConfirm(true)}>Cancel subscription</button>
+              </>
+            ) : (
+              <>
+                <p style={{ marginBottom: 12 }}>Are you sure? Your access will continue until the end of the current billing period.</p>
+                <div className="bb-row">
+                  <button className="bb-btn bb-btn-danger" disabled={cancelling} onClick={cancelSubscription}>{cancelling ? "Cancelling…" : "Yes, cancel at period end"}</button>
+                  <button className="bb-btn bb-btn-secondary" disabled={cancelling} onClick={() => setCancelConfirm(false)}>Keep subscription</button>
+                </div>
+              </>
+            )
+          ) : <p className="bb-muted">Subscription changes are available while the plan is active.</p>}
+        </section>
+      </div>
+    </main>
+  );
 }

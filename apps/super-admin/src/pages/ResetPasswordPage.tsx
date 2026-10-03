@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { authApi, getApiError } from "@barbaari/shared";
+import { Alert, AuthFrame, Field, PasswordChecklist, PasswordInput } from "@barbaari/shared/web/ui";
 
 export function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
@@ -26,29 +27,29 @@ export function ResetPasswordPage() {
   }
 
   if (!token || !email) {
-    return <main className="auth-shell"><div className="auth-card"><div className="alert danger">Invalid reset link.</div><div className="auth-links"><Link to="/forgot-password">Request new link</Link></div></div></main>;
+    return (
+      <AuthFrame foot={<Link to="/login">Back to sign in</Link>}>
+        <h1>This link doesn’t work</h1>
+        <Alert tone="danger">Invalid reset link.</Alert>
+        <Link className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" to="/forgot-password">Request a new link</Link>
+      </AuthFrame>
+    );
   }
 
   return (
-    <main className="auth-shell">
-      <form className="auth-card" onSubmit={submit}>
-        <div className="auth-brand">
-          <div className="auth-mark">B</div>
-          <div>
-            <span>Password recovery</span>
-            <h1>Set new password</h1>
-            <p>Enter a new password for <strong className="wrap-anywhere">{email}</strong>.</p>
-          </div>
-        </div>
-        <div className="auth-form">
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password (min 8 chars)" required minLength={8} />
-          <input type="password" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} placeholder="Confirm new password" required />
-          <button className="primary" disabled={loading}>{loading ? "Resetting..." : "Reset password"}</button>
-          <div className="auth-links"><Link to="/login">Back to login</Link></div>
-        </div>
-        {success ? <div className="alert success">{success} Redirecting…</div> : null}
-        {error ? <div className="alert danger">{error}</div> : null}
+    <AuthFrame foot={<Link to="/login">Back to sign in</Link>}>
+      <div>
+        <h1>Choose a new password</h1>
+        <p className="bb-lede" style={{ marginTop: 8, overflowWrap: "anywhere" }}>For {email}</p>
+      </div>
+      {success ? <Alert tone="ok">{success} Redirecting to sign in…</Alert> : null}
+      {error ? <Alert tone="danger">{error}</Alert> : null}
+      <form className="bb-auth-form" onSubmit={submit}>
+        <Field label="New password" htmlFor="reset-password"><PasswordInput id="reset-password" value={password} onChange={setPassword} autoComplete="new-password" minLength={8} /></Field>
+        <Field label="Confirm password" htmlFor="reset-confirm"><PasswordInput id="reset-confirm" value={confirmation} onChange={setConfirmation} autoComplete="new-password" /></Field>
+        <PasswordChecklist password={password} confirmation={confirmation} />
+        <button className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" disabled={loading}>{loading ? "Saving…" : "Save password"}</button>
       </form>
-    </main>
+    </AuthFrame>
   );
 }

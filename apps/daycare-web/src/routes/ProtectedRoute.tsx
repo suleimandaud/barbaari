@@ -2,19 +2,22 @@ import { useEffect, useRef, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { authApi, daycarePlatformBillingApi, getApiError, setBearerToken } from "@barbaari/shared";
 import { clearSession, getStoredToken } from "../services/auth";
+import { HourglassMedium, XCircle } from "@phosphor-icons/react";
+import { AuthFrame } from "@barbaari/shared/web/ui";
 import { ErrorState, LoadingState } from "../components/Status";
 
-function ApprovalStatusScreen({ title, message, showLogout = false }: { title: string; message: string; showLogout?: boolean }) {
+function ApprovalStatusScreen({ title, message, tone, showLogout = false }: { title: string; message: string; tone: "pending" | "rejected"; showLogout?: boolean }) {
   return (
-    <main className="page">
-      <section className="panel">
-        <div className="panel-header">
-          <h2>{title}</h2>
-          {showLogout ? <button className="secondary" onClick={() => { clearSession(); window.location.assign("/login"); }}>Logout</button> : null}
-        </div>
-        <p>{message}</p>
-      </section>
-    </main>
+    <AuthFrame foot={showLogout ? (
+      <div className="bb-row">
+        <button className="bb-btn bb-btn-secondary" onClick={() => { clearSession(); window.location.assign("/login"); }}>Sign out</button>
+        <a className="bb-btn bb-btn-ghost" href="mailto:support@barbaari.app">Contact support</a>
+      </div>
+    ) : undefined}>
+      <span className={`bb-status ${tone === "pending" ? "info" : "danger"}`} style={{ alignSelf: "flex-start" }}>{tone === "pending" ? <HourglassMedium size={16} /> : <XCircle size={16} />}{tone === "pending" ? "In review" : "Not approved"}</span>
+      <h1>{title}</h1>
+      <p className="bb-lede" style={{ marginTop: -4 }}>{message}</p>
+    </AuthFrame>
   );
 }
 
@@ -104,11 +107,11 @@ export function ProtectedRoute() {
   }, [token, retryTick]);
 
   if (!token || status === "denied") return <Navigate to="/login" replace />;
-  if (status === "checking" || status === "redirecting") return <main className="page"><LoadingState label="Checking session..." /></main>;
-  if (status === "pending") return <ApprovalStatusScreen title="Application pending" message="Your application is still pending approval." showLogout />;
-  if (status === "rejected") return <ApprovalStatusScreen title="Application not approved" message="Your application was not approved. Please contact support." showLogout />;
-  if (status === "error") return <main className="page"><ErrorState message={error || "Session check failed."} onRetry={() => window.location.assign("/login")} /></main>;
-  if (status === "connection_error") return <main className="page"><ErrorState message={error || "We couldn't reach the server."} onRetry={() => setRetryTick((tick) => tick + 1)} /></main>;
+  if (status === "checking" || status === "redirecting") return <main className="bb-page"><LoadingState label="Checking session" /></main>;
+  if (status === "pending") return <ApprovalStatusScreen tone="pending" title="We’re reviewing your application" message="Your application is still pending approval. The Barbaari team checks every new organization, and you’ll get an email as soon as you’re approved." showLogout />;
+  if (status === "rejected") return <ApprovalStatusScreen tone="rejected" title="Application not approved" message="Your application was not approved. Please contact support." showLogout />;
+  if (status === "error") return <main className="bb-page"><ErrorState message={error || "Session check failed."} onRetry={() => window.location.assign("/login")} /></main>;
+  if (status === "connection_error") return <main className="bb-page"><ErrorState title="We couldn’t reach Barbaari" message={error || "We couldn't reach the server."} onRetry={() => setRetryTick((tick) => tick + 1)} /></main>;
 
   return <Outlet />;
 }

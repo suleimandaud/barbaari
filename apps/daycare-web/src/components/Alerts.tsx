@@ -1,9 +1,11 @@
+import { Alert } from "@barbaari/shared/web/ui";
+
 export function ErrorAlert({ message }: { message?: string }) {
   if (!message) return null;
-  return <div className="alert-banner danger">{message}</div>;
+  return <Alert tone="danger">{message}</Alert>;
 }
 
 export function SuccessAlert({ message }: { message?: string }) {
   if (!message) return null;
-  return <div className="alert-banner success">{message}</div>;
+  return <Alert tone="ok">{message}</Alert>;
 }

@@ -1,11 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getApiError, invitationApi } from "@barbaari/shared";
-import { Badge, ErrorState, LoadingState } from "../components/Status";
-
-function titleize(value?: string | null) {
-  return String(value ?? "").replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
+import { Alert, AuthFrame, Field, LoadingState, PasswordChecklist, PasswordInput, StatusBadge, roleLabel } from "@barbaari/shared/web/ui";
+import { accountStatuses } from "@barbaari/shared/web/status";
 
 export function AcceptInvitePage() {
   const { token = "" } = useParams();
@@ -38,31 +35,35 @@ export function AcceptInvitePage() {
     }
   }
 
-  if (loading) return <main className="auth-shell"><div className="auth-card"><LoadingState label="Loading invitation..." /></div></main>;
-  if (error && !invitation) return <main className="auth-shell"><div className="auth-card"><div className="auth-brand"><div className="auth-mark">B</div><div><span>Barbaari invitation</span><h1>Invitation unavailable</h1><p>This invite may be invalid, expired, canceled, or already accepted.</p></div></div><ErrorState message={error} /><div className="auth-links"><Link to="/login">Back to login</Link></div></div></main>;
-
-  return <main className="auth-shell">
-    <form className="auth-card" onSubmit={submit}>
-      <div className="auth-brand">
-        <div className="auth-mark">B</div>
+  if (loading) return <AuthFrame><LoadingState rows={3} label="Loading invitation" /></AuthFrame>;
+  if (error && !invitation) {
+    return (
+      <AuthFrame foot={<Link to="/login">Back to sign in</Link>}>
         <div>
-          <span>Barbaari invitation</span>
-          <h1>Set up your account</h1>
-          <p>Create your password to join <strong>{invitation?.organization_name ?? "your daycare organization"}</strong>.</p>
+          <h1>Invitation unavailable</h1>
+          <p className="bb-lede" style={{ marginTop: 8 }}>This invite may be invalid, expired, canceled, or already accepted.</p>
         </div>
+        <Alert tone="danger">{error}</Alert>
+      </AuthFrame>
+    );
+  }
+
+  const pending = invitation?.status === "pending";
+  return (
+    <AuthFrame foot={<span className="bb-caption">This invitation is for {invitation?.email}{invitation?.expires_at ? ` and expires on ${new Date(invitation.expires_at).toLocaleDateString(undefined, { day: "numeric", month: "long" })}` : ""}.</span>}>
+      <div>
+        <h1>You’re invited to {invitation?.organization_name ?? "your daycare"}</h1>
+        <p className="bb-lede" style={{ marginTop: 8 }}>You’ve been added as a <strong>{roleLabel(invitation?.role)}</strong>. Create a password to join.</p>
       </div>
-      <div className="auth-meta-grid">
-        <div className="readonly-field"><span>Email</span><strong>{invitation?.email}</strong></div>
-        <div className="readonly-field"><span>Role</span><strong>{titleize(invitation?.role)}</strong></div>
-      </div>
-      <div className="auth-form">
-        <Badge tone={invitation?.status === "pending" ? "warning" : "success"}>{titleize(invitation?.status)}</Badge>
-        <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="New password" required />
-        <input type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="Confirm password" required />
-        <button className="primary" disabled={saving || invitation?.status !== "pending"}>{saving ? "Saving..." : "Accept invitation"}</button>
-        {success ? <div className="alert success">{success} <Link to="/login">Go to login</Link></div> : null}
-        {error ? <div className="alert danger">{error}</div> : null}
-      </div>
-    </form>
-  </main>;
+      {!pending ? <StatusBadge map={accountStatuses} value={invitation?.status} label={String(invitation?.status ?? "").replace(/_/g, " ").replace(/^\w/, (letter) => letter.toUpperCase())} /> : null}
+      {success ? <Alert tone="ok">{success} <Link to="/login">Go to sign in</Link></Alert> : null}
+      {error ? <Alert tone="danger">{error}</Alert> : null}
+      <form className="bb-auth-form" onSubmit={submit}>
+        <Field label="Create a password" htmlFor="invite-password"><PasswordInput id="invite-password" value={password} onChange={setPassword} autoComplete="new-password" placeholder="At least 8 characters" /></Field>
+        <Field label="Confirm password" htmlFor="invite-confirm"><PasswordInput id="invite-confirm" value={confirmation} onChange={setConfirmation} autoComplete="new-password" /></Field>
+        <PasswordChecklist password={password} confirmation={confirmation} />
+        <button className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" disabled={saving || !pending}>{saving ? "Saving…" : "Accept and continue"}</button>
+      </form>
+    </AuthFrame>
+  );
 }

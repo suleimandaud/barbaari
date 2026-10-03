@@ -41,7 +41,7 @@ export function SupportTicketsPage() {
     }, "Support ticket created.");
   }
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Support" title="Support tickets" action={<button className="primary" onClick={() => setModal("create")}>Create Ticket</button>} />
     <Alert message={success} />
     <Alert message={actionError} tone="danger" />

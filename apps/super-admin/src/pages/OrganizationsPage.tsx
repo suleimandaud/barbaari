@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { SearchInput } from "@barbaari/shared/web/ui";
 import { superAdminApi } from "@barbaari/shared";
 import { Alert, Badge, DataTable, ErrorState, Header, LoadingState, Modal, Panel } from "../components/Ui";
 import { useAsyncData } from "../hooks/useAsyncData";
@@ -64,6 +65,9 @@ function isPlanAllowedForFacility(plan: any, facilityType: string) {
 
 export function OrganizationsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = searchParams.get("q") ?? "";
+  const setQuery = (value: string) => setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set("q", value); else next.delete("q"); return next; }, { replace: true });
   const { data, loading, error, reload } = useAsyncData(async () => {
     const [organizations, plans] = await Promise.all([superAdminApi.organizations(), superAdminApi.pricingPlans()]);
     return { organizations: organizations.organizations, plans: plans.pricing_plans };
@@ -134,13 +138,14 @@ export function OrganizationsPage() {
   }
 
   return (
-    <section className="page">
+    <main className="bb-page">
       <Header eyebrow="Tenant control" title="Organizations" action={<div className="row-actions"><button className="primary" onClick={() => navigate("/registration-applications")}>Review applications</button><button className="secondary" onClick={() => { setForm({ ...emptyForm, pricing_plan_id: data?.plans?.[0]?.id ?? "" }); setCreatedResult(null); setCreating(true); }}>Internal support only</button></div>} />
       <Alert message={success} />
       <Alert message={actionError} tone="danger" />
 
+      <div className="bb-toolbar"><div style={{ flex: "1 1 260px", maxWidth: 380 }}><SearchInput value={query} onChange={setQuery} placeholder="Name, city, email or license" /></div></div>
       {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : (
-        <DataTable rows={data?.organizations ?? []} columns={[
+        <DataTable rows={(data?.organizations ?? []).filter((row: any) => !query.trim() || `${row.name} ${row.city ?? ""} ${row.state ?? ""} ${row.primary_admin_email ?? ""} ${row.email ?? ""} ${row.license_number ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()))} emptyTitle={query ? "No organizations match" : undefined} emptyDetail={query ? "Try another name, city or email." : undefined} columns={[
           { header: "Organization", render: (row: any) => <><strong>{row.name}</strong><br /><small>{row.city ?? "No city"}{row.state ? `, ${row.state}` : ""}</small><br /><Badge>{titleize(row.facility_type ?? "center_daycare")}</Badge></> },
           { header: "Status", render: (row: any) => <Badge tone={row.status}>{titleize(row.status)}</Badge> },
           { header: "License", render: (row: any) => <><span>{row.licenseNumber ?? row.license_number ?? "Optional"}</span><br /><Badge tone={row.license_status === "verified" ? "success" : row.license_status === "rejected" ? "danger" : "warning"}>{titleize(row.license_status ?? "not_provided")}</Badge></> },
@@ -258,6 +263,6 @@ export function OrganizationsPage() {
           </>}
         </Modal>
       ) : null}
-    </section>
+    </main>
   );
 }

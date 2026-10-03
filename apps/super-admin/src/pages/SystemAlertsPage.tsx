@@ -37,7 +37,7 @@ export function SystemAlertsPage() {
     }, "System alert created.");
   }
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Reliability" title="System alerts" action={<button className="primary" onClick={() => setOpen(true)}>Create Alert</button>} />
     <Alert message={success} />
     <Alert message={actionError} tone="danger" />

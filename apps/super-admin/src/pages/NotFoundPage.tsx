@@ -1,13 +1,14 @@
 import { Link } from "react-router-dom";
+import { Compass } from "@phosphor-icons/react";
 
 export function NotFoundPage() {
   return (
-    <main className="page" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div className="panel" style={{ maxWidth: 460, textAlign: "center", padding: "40px 32px" }}>
-        <div style={{ fontSize: 56, marginBottom: 16 }}>🔍</div>
-        <h1 style={{ margin: "0 0 8px" }}>Page not found</h1>
-        <p style={{ color: "#647a82", marginBottom: 24 }}>The page you're looking for doesn't exist.</p>
-        <Link className="primary" to="/" style={{ display: "inline-flex", textDecoration: "none" }}>Go to Dashboard</Link>
+    <main className="bb-auth">
+      <div className="bb-auth-card">
+        <Compass size={48} color="var(--bb-accent)" aria-hidden />
+        <h1>Page not found</h1>
+        <p className="bb-lede">The page you're looking for doesn't exist.</p>
+        <Link className="bb-btn bb-btn-primary bb-btn-lg" to="/" style={{ alignSelf: "flex-start" }}>Go to Platform</Link>
       </div>
     </main>
   );

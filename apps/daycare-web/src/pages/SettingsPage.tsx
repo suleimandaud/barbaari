@@ -2,9 +2,9 @@ import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
 import { authApi, getApiError, organizationApi } from "@barbaari/shared";
 import { useAsyncData } from "../hooks/useAsyncData";
-import { ErrorState, LoadingState, Badge } from "../components/Status";
-import { PageHeader, Panel } from "../components/Page";
-import { ErrorAlert, SuccessAlert } from "../components/Alerts";
+import { CheckCircle, MapPin } from "@phosphor-icons/react";
+import { Alert, ErrorState, LoadingState, PageHeader, StatusBadge, useToast } from "@barbaari/shared/web/ui";
+import { accountStatuses, subscriptionStatuses } from "@barbaari/shared/web/status";
 
 type OrgForm = {
   name: string;
@@ -41,7 +41,8 @@ export function SettingsPage() {
   const [validatedLocation, setValidatedLocation] = useState<any | null>(null);
   const [ownerPin, setOwnerPin] = useState("");
   const [ownerPinConfirm, setOwnerPinConfirm] = useState("");
-  const [success, setSuccess] = useState("");
+  const toast = useToast();
+  const setSuccess = (message: string) => { if (message) toast(message); };
   const [actionError, setActionError] = useState("");
   const [saving, setSaving] = useState(false);
   const [validatingLocation, setValidatingLocation] = useState(false);
@@ -180,91 +181,86 @@ export function SettingsPage() {
   const detectedTimezone = validatedLocation?.timezone ?? data?.timezone ?? data?.attendance_timezone ?? null;
 
   return (
-    <section className="page">
-      <PageHeader eyebrow="Organization" title="Organization profile" description="Manage provider business details, licensing information, and attendance location." />
-      <SuccessAlert message={success} />
-      <ErrorAlert message={actionError} />
-      {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : data ? (
-        <div className="settings-stack">
-          <form onSubmit={submit} className="settings-stack">
-            <Panel title="Business Information">
-              <div className="form-grid labeled-grid">
+    <main className="bb-page narrow">
+      <PageHeader kicker="Organization" title="Settings" lede="Provider business details, licensing information and the attendance location used for tablet check-in." />
+      {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
+      {loading && !data ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : data ? (
+        <div className="bb-settings">
+          <form onSubmit={submit} className="bb-settings">
+            <Section title="Business information">
+              <div className="bb-form-grid">
                 <Field label="Daycare name" value={form.name} onChange={(value) => setForm({ ...form, name: value })} required />
-                <Field label="Legal/business name" value={form.legal_name} onChange={(value) => setForm({ ...form, legal_name: value })} />
+                <Field label="Legal / business name" value={form.legal_name} onChange={(value) => setForm({ ...form, legal_name: value })} />
                 <Field label="Phone" value={form.phone} onChange={(value) => setForm({ ...form, phone: value })} />
                 <Field label="Email" type="email" value={form.email} onChange={(value) => setForm({ ...form, email: value })} />
                 <Field label="Website" value={form.website} onChange={(value) => setForm({ ...form, website: value })} />
                 <Field label="License number" value={form.license_number} onChange={(value) => setForm({ ...form, license_number: value })} />
-                <label className="field-stack"><span>License status</span><select value={form.license_status} onChange={(event) => setForm({ ...form, license_status: event.target.value })}><option value="not_provided">Not provided</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option><option value="expired">Expired</option></select></label>
+                <label className="bb-field"><span className="bb-label">License status</span><select className="bb-input" value={form.license_status} onChange={(event) => setForm({ ...form, license_status: event.target.value })}><option value="not_provided">Not provided</option><option value="pending">Pending</option><option value="verified">Verified</option><option value="rejected">Rejected</option><option value="expired">Expired</option></select></label>
               </div>
-            </Panel>
-            <Panel title="Status / Settings">
-              <div className="form-grid labeled-grid">
-                <ReadOnly label="Facility type" value={String(data.facility_type ?? "center_daycare").replace(/_/g, " ")} />
-                <ReadOnly label="Organization status" value={<Badge tone={data.status === "active" ? "success" : "warning"}>{data.status ?? "active"}</Badge>} />
-                <ReadOnly label="Subscription plan" value={data.subscription?.pricing_plan?.name ?? data.plan ?? "Starter"} />
-                <ReadOnly label="Subscription status" value={<Badge tone={data.subscription?.status === "active" ? "success" : "warning"}>{data.subscription?.status ?? "active"}</Badge>} />
-              </div>
-            </Panel>
-            <Panel title="Attendance Location">
-              {hasCurrentAddress ? <p className="muted">Current saved address: {data.standardized_address || [data.address_line1, data.address_line2, data.city, data.state, data.postal_code].filter(Boolean).join(", ")}</p> : null}
-              {hasLegacyCoordinates ? <p className="muted">Current coordinates are saved. Update by entering a physical address below.</p> : null}
+            </Section>
+            <Section title="Status">
+              <dl className="bb-kv">
+                <dt>Facility type</dt><dd>{String(data.facility_type ?? "center_daycare").replace(/_/g, " ").replace(/^\w/, (letter: string) => letter.toUpperCase())}</dd>
+                <dt>Organization</dt><dd><StatusBadge size="sm" map={accountStatuses} value={data.status ?? "active"} /></dd>
+                <dt>Subscription plan</dt><dd>{data.subscription?.pricing_plan?.name ?? data.plan ?? "Starter"}</dd>
+                <dt>Subscription</dt><dd><StatusBadge size="sm" map={subscriptionStatuses} value={data.subscription?.status ?? "active"} /></dd>
+              </dl>
+            </Section>
+            <Section title="Attendance location">
+              {hasCurrentAddress ? <p className="bb-row" style={{ gap: 8, flexWrap: "nowrap", alignItems: "flex-start", marginBottom: 15 }}><MapPin size={20} color="var(--bb-accent)" style={{ flex: "none" }} /><span>Current saved address: {data.standardized_address || [data.address_line1, data.address_line2, data.city, data.state, data.postal_code].filter(Boolean).join(", ")}</span></p> : null}
+              {hasLegacyCoordinates ? <p className="bb-muted" style={{ marginBottom: 15 }}>Current coordinates are saved. Update by entering a physical address below.</p> : null}
               {!canManageAttendanceLocation ? (
-                <p className="muted">Only provider admins and managers can update attendance location.</p>
+                <p className="bb-muted">Only provider admins and managers can update attendance location.</p>
               ) : (
-                <div className="form-grid labeled-grid">
-                  <Field label="Street address" value={locationForm.address_line1} onChange={(value) => setLocationField("address_line1", value)} required />
-                  <Field label="Unit / Apartment / Suite" value={locationForm.address_line2} onChange={(value) => setLocationField("address_line2", value)} />
-                  <Field label="City" value={locationForm.city} onChange={(value) => setLocationField("city", value)} required />
-                  <Field label="State" value={locationForm.state} onChange={(value) => setLocationField("state", value)} required />
-                  <Field label="ZIP Code" value={locationForm.postal_code} onChange={(value) => setLocationField("postal_code", value)} required />
-                  <Field label="Country" value={locationForm.country} onChange={(value) => setLocationField("country", value)} required />
-                  <Field label="Allowed attendance radius (meters)" type="number" value={locationForm.attendance_radius_meters} onChange={(value) => setLocationField("attendance_radius_meters", value)} required />
-                  <div className="full actions">
-                    <button className="secondary" type="button" disabled={validatingLocation} onClick={validateLocationAddress}>{validatingLocation ? "Validating..." : "Validate Address"}</button>
-                    <button className="primary" type="button" disabled={savingLocation || !validatedLocation} onClick={saveAttendanceLocation}>{savingLocation ? "Saving..." : "Save Attendance Location"}</button>
+                <>
+                  <div className="bb-form-grid">
+                    <Field label="Street address" value={locationForm.address_line1} onChange={(value) => setLocationField("address_line1", value)} required />
+                    <Field label="Unit / apartment / suite" value={locationForm.address_line2} onChange={(value) => setLocationField("address_line2", value)} />
+                    <Field label="City" value={locationForm.city} onChange={(value) => setLocationField("city", value)} required />
+                    <Field label="State" value={locationForm.state} onChange={(value) => setLocationField("state", value)} required />
+                    <Field label="ZIP code" value={locationForm.postal_code} onChange={(value) => setLocationField("postal_code", value)} required />
+                    <Field label="Country" value={locationForm.country} onChange={(value) => setLocationField("country", value)} required />
+                    <Field label="Allowed attendance radius (meters)" type="number" value={locationForm.attendance_radius_meters} onChange={(value) => setLocationField("attendance_radius_meters", value)} required />
                   </div>
-                  {validatedLocation ? (
-                    <div className="field-stack readonly-field full">
-                      <span>Standardized address</span>
-                      <strong>{validatedLocation.standardized_address}</strong>
-                      <small>Coordinates saved after validation.</small>
-                    </div>
+                  <div className="bb-row" style={{ marginTop: 20 }}>
+                    <button className="bb-btn bb-btn-secondary" type="button" disabled={validatingLocation} onClick={validateLocationAddress}>{validatingLocation ? "Validating…" : "Validate address"}</button>
+                    <button className="bb-btn bb-btn-primary" type="button" disabled={savingLocation || !validatedLocation} onClick={saveAttendanceLocation}>{savingLocation ? "Saving…" : "Save attendance location"}</button>
+                  </div>
+                  {validatedLocation || detectedTimezone ? (
+                    <dl className="bb-kv" style={{ marginTop: 20 }}>
+                      {validatedLocation ? <><dt>Standardized address</dt><dd>{validatedLocation.standardized_address}<span className="bb-caption" style={{ display: "block" }}>Coordinates saved after validation.</span></dd></> : null}
+                      {detectedTimezone ? <><dt>Timezone</dt><dd>{detectedTimezone}<span className="bb-caption bb-row" style={{ gap: 4 }}><CheckCircle size={14} />Automatically detected from the attendance address</span></dd></> : null}
+                    </dl>
                   ) : null}
-                  {detectedTimezone ? (
-                    <div className="field-stack readonly-field full">
-                      <span>Timezone</span>
-                      <strong>{detectedTimezone}</strong>
-                      <small>✓ Automatically detected from attendance address</small>
-                    </div>
-                  ) : null}
-                  <p className="muted full">Attendance check-in and check-out require device location and are blocked outside this radius. This address will be used for tablet attendance geofence.</p>
-                </div>
+                  <p className="bb-caption" style={{ marginTop: 15 }}>Attendance check-in and check-out require device location and are blocked outside this radius. This address is used for the tablet attendance geofence.</p>
+                </>
               )}
-            </Panel>
-            <button className="primary settings-submit" disabled={saving}>{saving ? "Saving..." : "Update organization"}</button>
+            </Section>
+            <div><button className="bb-btn bb-btn-primary bb-btn-lg" disabled={saving}>{saving ? "Saving…" : "Update organization"}</button></div>
           </form>
           {data.facility_type === "family_child_care" ? (
-            <Panel title="Owner Tablet PIN">
-              <form className="form-grid labeled-grid" onSubmit={submitOwnerPin}>
-                <ReadOnly label="Current PIN status" value={<Badge tone={currentUser?.tablet_pin_configured ? "success" : "warning"}>{currentUser?.tablet_pin_configured ? "PIN configured" : "PIN missing"}</Badge>} />
-                <Field label="New owner tablet PIN" type="password" value={ownerPin} onChange={setOwnerPin} required />
-                <Field label="Confirm owner tablet PIN" type="password" value={ownerPinConfirm} onChange={setOwnerPinConfirm} required />
-                <p className="muted full">This PIN is used only when the owner/admin is selected as an attendance signer in Family Child Care tablet mode. It does not change your login password.</p>
-                <button className="primary" disabled={pinSaving}>{pinSaving ? "Saving PIN..." : "Save owner tablet PIN"}</button>
+            <Section title="Owner tablet PIN">
+              <form onSubmit={submitOwnerPin}>
+                <div className="bb-row" style={{ marginBottom: 15 }}><StatusBadge map={{ yes: { label: "PIN configured", tone: "ok", icon: "check" }, no: { label: "PIN missing", tone: "warn", icon: "warning" } }} value={currentUser?.tablet_pin_configured ? "yes" : "no"} /></div>
+                <div className="bb-form-grid">
+                  <Field label="New owner tablet PIN" type="password" value={ownerPin} onChange={setOwnerPin} required />
+                  <Field label="Confirm owner tablet PIN" type="password" value={ownerPinConfirm} onChange={setOwnerPinConfirm} required />
+                </div>
+                <p className="bb-caption" style={{ margin: "15px 0" }}>This PIN is used only when the owner/admin is selected as an attendance signer in Family Child Care tablet mode. It does not change your login password.</p>
+                <button className="bb-btn bb-btn-primary" disabled={pinSaving}>{pinSaving ? "Saving PIN…" : "Save owner tablet PIN"}</button>
               </form>
-            </Panel>
+            </Section>
           ) : null}
         </div>
       ) : null}
-    </section>
+    </main>
   );
 }
 
-function Field({ label, value, onChange, type = "text", required = false }: { label: string; value: string; type?: string; required?: boolean; onChange: (value: string) => void }) {
-  return <label className="field-stack"><span>{label}</span><input type={type} value={value} required={required} onChange={(event) => onChange(event.target.value)} /></label>;
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="bb-section bb-settings-section"><h2>{title}</h2>{children}</section>;
 }
 
-function ReadOnly({ label, value }: { label: string; value: React.ReactNode }) {
-  return <div className="field-stack readonly-field"><span>{label}</span><strong>{value}</strong></div>;
+function Field({ label, value, onChange, type = "text", required = false }: { label: string; value: string; type?: string; required?: boolean; onChange: (value: string) => void }) {
+  return <label className="bb-field"><span className="bb-label">{label}</span><input className="bb-input" type={type} value={value} required={required} onChange={(event) => onChange(event.target.value)} inputMode={type === "password" ? "numeric" : undefined} /></label>;
 }

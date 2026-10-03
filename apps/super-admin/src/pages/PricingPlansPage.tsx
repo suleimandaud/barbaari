@@ -69,7 +69,7 @@ export function PricingPlansPage() {
     }
   }
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Packaging" title="Pricing plans" action={<button className="primary" onClick={() => open()}>Create Plan</button>} />
     <Alert message={success} />
     <Alert message={actionError} tone="danger" />

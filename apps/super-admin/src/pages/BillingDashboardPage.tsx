@@ -6,7 +6,7 @@ import { dateShort, money, titleize } from "../utils/format";
 export function BillingDashboardPage() {
   const { data, loading, error, reload } = useAsyncData(async () => await superAdminApi.billingDashboard(), []);
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Platform Billing" title="Billing dashboard" />
     <Alert tone="warning" message="Stripe is test-mode ready only. Manual platform payments are active; Barbaari does not collect or store card numbers." />
     {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : <>

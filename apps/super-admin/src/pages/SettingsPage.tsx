@@ -41,10 +41,10 @@ export function SettingsPage() {
     }
   }
 
-  if (loading) return <section className="page"><LoadingState /></section>;
-  if (error) return <section className="page"><ErrorState message={error} onRetry={reload} /></section>;
+  if (loading) return <section className="bb-page"><LoadingState /></section>;
+  if (error) return <section className="bb-page"><ErrorState message={error} onRetry={reload} /></section>;
 
-  return <section className="page">
+  return <section className="bb-page">
     <Header eyebrow="Platform" title="Platform settings" />
     <Alert tone="warning" message="Demo placeholder: SMS delivery, email delivery, and Stripe payment processing are not connected yet. These controls store demo configuration only." />
     <Alert message={success} />

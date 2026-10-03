@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getApiError } from "@barbaari/shared";
-import { Badge } from "../components/Ui";
+import { Alert, AuthFrame, Field, PasswordInput } from "@barbaari/shared/web/ui";
 import { getStoredEmail, login } from "../services/auth";
 
 export function LoginPage() {
@@ -27,24 +27,19 @@ export function LoginPage() {
   }
 
   return (
-    <main className="auth-shell">
-      <form className="auth-card" onSubmit={submit}>
-        <div className="auth-brand">
-          <div className="auth-mark">B</div>
-          <div>
-            <span>Barbaari</span>
-            <h1>Platform admin sign in</h1>
-            <p>Manage organizations, platform billing, users, and operational oversight.</p>
-          </div>
-        </div>
-        <div className="auth-form">
-          <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email address" required autoComplete="email" />
-          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" required autoComplete="current-password" />
-          <button className="primary" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
-          <div className="auth-links"><Link to="/forgot-password">Forgot password?</Link></div>
-        </div>
-        {error ? <Badge tone="danger">{error}</Badge> : null}
+    <AuthFrame>
+      <div>
+        <h1>Barbaari platform admin</h1>
+        <p className="bb-lede" style={{ marginTop: 8 }}>Manage organizations, platform billing, users and operational oversight.</p>
+      </div>
+      {error ? <Alert tone="danger">{error}</Alert> : null}
+      <form className="bb-auth-form" onSubmit={submit}>
+        <Field label="Email" htmlFor="admin-email"><input id="admin-email" className="bb-input" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" /></Field>
+        <Field label="Password" htmlFor="admin-password" labelAction={<Link to="/forgot-password">Forgot password?</Link>}>
+          <PasswordInput id="admin-password" value={password} onChange={setPassword} autoComplete="current-password" />
+        </Field>
+        <button className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
       </form>
-    </main>
+    </AuthFrame>
   );
 }

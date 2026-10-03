@@ -1,7 +1,9 @@
 import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
 import { getApiError, registrationApi } from "@barbaari/shared";
-import { ErrorAlert, SuccessAlert } from "../components/Alerts";
+import { Link } from "react-router-dom";
+import { CheckCircle } from "@phosphor-icons/react";
+import { Alert, AuthFrame, Segmented } from "@barbaari/shared/web/ui";
 
 const emptyForm = {
   facility_type: "family_child_care",
@@ -138,88 +140,87 @@ export function RegisterProviderPage() {
     }
   }
 
+  const input = (key: keyof typeof emptyForm, label: string, props: React.InputHTMLAttributes<HTMLInputElement> = {}, onChange?: (value: string) => void) => (
+    <label className="bb-field" style={props.style}>
+      <span className="bb-label">{label}</span>
+      <input className="bb-input" {...props} style={undefined} value={form[key]} onChange={(event) => (onChange ? onChange(event.target.value) : setForm({ ...form, [key]: event.target.value }))} />
+    </label>
+  );
+  const full = { style: { gridColumn: "1 / -1" } };
+
   return (
-    <main className="auth-page">
-      <section className="auth-card wide-auth">
-        <div className="auth-brand"><span>B</span><strong>Barbaari</strong></div>
-        <h1>Register your provider account</h1>
-        <p>Apply for Barbaari attendance-first SaaS access. Super Admin reviews applications before creating the workspace and sending the owner invite.</p>
-        {form.facility_type === "family_child_care" ? (
-          <p className="muted">Family Child Care is for home-based providers. It uses children, guardians, attendance, signatures, geofence verification, reports, and billing without classrooms. Starter is the only available plan for this facility type.</p>
-        ) : (
-          <p className="muted">Center Daycare supports classrooms, staff access, classroom attendance, tablet/kiosk mode, reports, and subscription billing.</p>
-        )}
-        <SuccessAlert message={success} />
-        <ErrorAlert message={error} />
-        <form className="form-grid two" onSubmit={submit}>
-          <label className="field-stack full"><span>Facility type</span><select value={form.facility_type} onChange={(event) => setForm({ ...form, facility_type: event.target.value, pricing_plan_id: "" })}><option value="family_child_care">Family Child Care</option><option value="center_daycare">Center Daycare</option></select></label>
-          <input value={form.business_name} onChange={(event) => setForm({ ...form, business_name: event.target.value })} placeholder={`${facilityLabel(form.facility_type)} name`} required />
-          <input value={form.owner_name} onChange={(event) => setForm({ ...form, owner_name: event.target.value })} placeholder="Owner/admin full name" required />
-          <input type="email" value={form.owner_email} onChange={(event) => setForm({ ...form, owner_email: event.target.value })} placeholder="Owner/admin email" required />
-          <input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Password" minLength={8} required autoComplete="new-password" />
-          <input type="password" value={form.password_confirmation} onChange={(event) => setForm({ ...form, password_confirmation: event.target.value })} placeholder="Confirm password" minLength={8} required autoComplete="new-password" />
-          <p className="muted full">You will use this email and password to log in after your application is approved.</p>
-          <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="Phone" />
-          <label className="field-stack full"><span>Physical address</span><input value={form.address_line1} onChange={(event) => setAddressField("address_line1", event.target.value)} placeholder="Street address" required /></label>
-          <input value={form.address_line2} onChange={(event) => setAddressField("address_line2", event.target.value)} placeholder="Unit / Apartment / Suite optional" />
-          <input value={form.city} onChange={(event) => setAddressField("city", event.target.value)} placeholder="City" required />
-          <input value={form.state} onChange={(event) => setAddressField("state", event.target.value.toUpperCase())} placeholder="State" maxLength={2} required />
-          <input value={form.postal_code} onChange={(event) => setAddressField("postal_code", event.target.value)} placeholder="ZIP Code" required />
-          <input value={form.country} onChange={(event) => setAddressField("country", event.target.value.toUpperCase())} placeholder="Country" maxLength={2} required />
-          <input type="number" min="25" max="5000" value={form.attendance_radius_meters} onChange={(event) => setForm({ ...form, attendance_radius_meters: event.target.value })} placeholder="Allowed attendance radius in meters" required />
-          <div className="full actions">
-            <button className="secondary" type="button" disabled={validatingAddress} onClick={validateAddress}>{validatingAddress ? "Validating..." : "Validate Address"}</button>
+    <AuthFrame wide foot={<span>Already invited? <Link to="/login">Sign in</Link></span>}>
+      <div>
+        <h1>Register your organization</h1>
+        <p className="bb-lede" style={{ marginTop: 8 }}>Apply for Barbaari. The Barbaari team reviews every application before creating your workspace and sending the owner invite.</p>
+      </div>
+      {success ? <Alert tone="ok">{success}</Alert> : null}
+      {error ? <Alert tone="danger">{error}</Alert> : null}
+      <form className="bb-auth-form" onSubmit={submit}>
+        <section className="bb-stack">
+          <span className="bb-label">Facility type</span>
+          <Segmented label="Facility type" value={form.facility_type as "family_child_care" | "center_daycare"} onChange={(value) => setForm({ ...form, facility_type: value, pricing_plan_id: "" })} items={[{ key: "family_child_care", label: "Family Child Care" }, { key: "center_daycare", label: "Center Daycare" }]} />
+          <p className="bb-caption">{form.facility_type === "family_child_care"
+            ? "Family Child Care is for home-based providers. It uses children, guardians, attendance, signatures, geofence verification, reports, and billing without classrooms. Starter is the only available plan for this facility type."
+            : "Center Daycare supports classrooms, staff access, classroom attendance, tablet/kiosk mode, reports, and subscription billing."}</p>
+        </section>
+
+        <h2 className="bb-report-h" style={{ marginBottom: 0 }}>Owner account</h2>
+        <div className="bb-form-grid">
+          {input("business_name", `${facilityLabel(form.facility_type)} name`, { required: true, ...full })}
+          {input("owner_name", "Owner / admin full name", { required: true, autoComplete: "name" })}
+          {input("owner_email", "Owner / admin email", { type: "email", required: true, autoComplete: "email" })}
+          {input("password", "Password", { type: "password", minLength: 8, required: true, autoComplete: "new-password" })}
+          {input("password_confirmation", "Confirm password", { type: "password", minLength: 8, required: true, autoComplete: "new-password" })}
+          {input("phone", "Phone", { autoComplete: "tel" })}
+        </div>
+        <p className="bb-caption" style={{ marginTop: -8 }}>You will use this email and password to sign in after your application is approved.</p>
+
+        <h2 className="bb-report-h" style={{ marginBottom: 0 }}>Physical address</h2>
+        <div className="bb-form-grid">
+          {input("address_line1", "Street address", { required: true, ...full }, (value) => setAddressField("address_line1", value))}
+          {input("address_line2", "Unit / apartment / suite (optional)", {}, (value) => setAddressField("address_line2", value))}
+          {input("city", "City", { required: true }, (value) => setAddressField("city", value))}
+          {input("state", "State", { maxLength: 2, required: true }, (value) => setAddressField("state", value.toUpperCase()))}
+          {input("postal_code", "ZIP code", { required: true }, (value) => setAddressField("postal_code", value))}
+          {input("country", "Country", { maxLength: 2, required: true }, (value) => setAddressField("country", value.toUpperCase()))}
+          {input("attendance_radius_meters", "Allowed attendance radius (meters)", { type: "number", min: 25, max: 5000, required: true })}
+        </div>
+        <div><button className="bb-btn bb-btn-secondary" type="button" disabled={validatingAddress} onClick={validateAddress}>{validatingAddress ? "Validating…" : "Validate address"}</button></div>
+        {validatedAddress ? (
+          <div className="bb-alert ok">
+            <CheckCircle size={20} />
+            <div>
+              <strong>{validatedAddress.standardized_address}</strong>
+              <span>Address validated. Location will be used for tablet attendance geofence.{validatedAddress.latitude && validatedAddress.longitude ? " Location coordinates saved." : ""}</span>
+              {validatedAddress.timezone ? <span>Timezone: {validatedAddress.timezone} · automatically detected from the attendance address</span> : null}
+            </div>
           </div>
-          {validatedAddress ? (
-            <article className="plan-explainer full">
-              <div>
-                <span>Standardized address</span>
-                <strong>{validatedAddress.standardized_address}</strong>
-              </div>
-              <ul>
-                <li>{validatedAddress.city}</li>
-                <li>{validatedAddress.state}</li>
-                <li>{validatedAddress.postal_code}</li>
-              </ul>
-              <p>Address validated. Location will be used for tablet attendance geofence.</p>
-              {validatedAddress.latitude && validatedAddress.longitude ? <small>Location coordinates saved.</small> : null}
-              {validatedAddress.timezone ? (
-                <div>
-                  <span>Timezone</span>
-                  <strong>{validatedAddress.timezone}</strong>
-                  <small>✓ Automatically detected from attendance address</small>
-                </div>
-              ) : null}
-            </article>
-          ) : null}
-          <input value={form.license_number} onChange={(event) => setForm({ ...form, license_number: event.target.value })} placeholder="License number optional" />
-          <select value={form.license_status} onChange={(event) => setForm({ ...form, license_status: event.target.value })}><option value="not_provided">License not provided</option><option value="pending">Pending</option><option value="verified">Verified</option></select>
-          <label className="field-stack full"><span>Desired plan</span><select value={form.pricing_plan_id} onChange={(event) => setForm({ ...form, pricing_plan_id: event.target.value })}>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - ${Number(plan.monthly_price).toFixed(0)}/month ({plan.child_limit} children, {plan.staff_limit} staff, {plan.device_limit} tablets)</option>)}</select></label>
-          <select value={form.billing_cycle} onChange={(event) => setForm({ ...form, billing_cycle: event.target.value })}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
-          {selectedPlan ? (
-            <article className="plan-explainer full">
-              <div>
-                <span>Selected plan</span>
-                <strong>{selectedPlan.name}</strong>
-              </div>
-              <div>
-                <span>Price</span>
-                <strong>{selectedPrice}</strong>
-              </div>
-              <ul>
-                <li>{selectedPlan.child_limit} children</li>
-                <li>{selectedPlan.staff_limit} staff</li>
-                <li>{selectedPlan.device_limit} tablet devices</li>
-              </ul>
-              {planFeatures(selectedPlan) ? <p>{planFeatures(selectedPlan)}</p> : null}
-              {form.facility_type === "family_child_care" ? <small>Family Child Care registration is available on Starter only.</small> : null}
-            </article>
-          ) : null}
-          <textarea className="full" value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="Notes optional" rows={4} />
-          <button className="primary full" disabled={saving}>{saving ? "Submitting..." : "Submit application"}</button>
-        </form>
-        <a href="/login">Already invited? Log in</a>
-      </section>
-    </main>
+        ) : null}
+
+        <h2 className="bb-report-h" style={{ marginBottom: 0 }}>License and plan</h2>
+        <div className="bb-form-grid">
+          {input("license_number", "License number (optional)")}
+          <label className="bb-field"><span className="bb-label">License status</span><select className="bb-input" value={form.license_status} onChange={(event) => setForm({ ...form, license_status: event.target.value })}><option value="not_provided">License not provided</option><option value="pending">Pending</option><option value="verified">Verified</option></select></label>
+          <label className="bb-field" style={{ gridColumn: "1 / -1" }}><span className="bb-label">Desired plan</span><select className="bb-input" value={form.pricing_plan_id} onChange={(event) => setForm({ ...form, pricing_plan_id: event.target.value })}>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · ${Number(plan.monthly_price).toFixed(0)}/month ({plan.child_limit} children, {plan.staff_limit} staff, {plan.device_limit} tablets)</option>)}</select></label>
+          <label className="bb-field"><span className="bb-label">Billing cycle</span><select className="bb-input" value={form.billing_cycle} onChange={(event) => setForm({ ...form, billing_cycle: event.target.value })}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></label>
+        </div>
+        {selectedPlan ? (
+          <div className="bb-panel">
+            <p className="bb-overline">Selected plan</p>
+            <div className="bb-row" style={{ justifyContent: "space-between", margin: "8px 0 10px" }}><strong style={{ fontSize: 24 }}>{selectedPlan.name}</strong><strong className="bb-num" style={{ fontSize: 20 }}>{selectedPrice}</strong></div>
+            <div className="bb-row" style={{ gap: 8 }}>
+              <span className="bb-tag accent">{selectedPlan.child_limit} children</span>
+              <span className="bb-tag accent">{selectedPlan.staff_limit} staff</span>
+              <span className="bb-tag accent">{selectedPlan.device_limit} tablet devices</span>
+            </div>
+            {planFeatures(selectedPlan) ? <p style={{ marginTop: 10 }}>{planFeatures(selectedPlan)}</p> : null}
+            {form.facility_type === "family_child_care" ? <p className="bb-caption" style={{ marginTop: 6 }}>Family Child Care registration is available on Starter only.</p> : null}
+          </div>
+        ) : null}
+        <label className="bb-field"><span className="bb-label">Notes (optional)</span><textarea className="bb-input" value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} rows={4} /></label>
+        <button className="bb-btn bb-btn-primary bb-btn-lg bb-btn-block" disabled={saving}>{saving ? "Submitting…" : "Submit application"}</button>
+      </form>
+    </AuthFrame>
   );
 }

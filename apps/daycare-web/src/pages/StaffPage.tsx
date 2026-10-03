@@ -1,83 +1,44 @@
 import type { FormEvent } from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { CaretRight, EnvelopeSimple, IdentificationBadge, UserPlus } from "@phosphor-icons/react";
 import { classroomsApi, getApiError, staffApi } from "@barbaari/shared";
-import { ErrorAlert, SuccessAlert } from "../components/Alerts";
-import { DataTable } from "../components/DataTable";
-import { PageHeader, Panel } from "../components/Page";
-import { Badge, ErrorState, LoadingState } from "../components/Status";
+import { Alert, Avatar, Drawer, EmptyState, ErrorState, LoadingState, PageHeader, Pagination, SearchInput, Segmented, StatusBadge, usePaged, useToast } from "@barbaari/shared/web/ui";
+import { accountStatuses } from "@barbaari/shared/web/status";
 import { useAsyncData } from "../hooks/useAsyncData";
 import { friendlyError } from "../utils/labels";
+import { StaffForm, blankStaff, staffPayload, staffRoleLabel, staffRoles, type StaffFormValues } from "./staffShared";
 
-const blank = { name: "", email: "", phone: "", role: "teacher", classroom_id: "", title: "", status: "active", pin: "" };
-const roles = [
-  ["teacher", "Teacher"],
-  ["staff", "Staff"],
-  ["manager", "Manager"],
-  ["billing_manager", "Billing manager"],
-];
+type Filter = "all" | "active" | "pending_invite" | "inactive" | "blocked";
 
-function userId(row: any) {
+export function userId(row: any) {
   return row.user?.id ?? row.user_id;
 }
 
-function roleLabel(role?: string) {
-  return roles.find(([value]) => value === role)?.[1] ?? String(role ?? "Staff").replace(/_/g, " ");
-}
-
 export function StaffPage() {
+  const navigate = useNavigate();
+  const toast = useToast();
   const { data, loading, error, reload } = useAsyncData(async () => {
     const [staff, classrooms] = await Promise.all([staffApi.list(), classroomsApi.list()]);
     return { staff: staff.staff, classrooms: classrooms.classrooms };
   }, []);
-  const [form, setForm] = useState(blank);
-  const [editing, setEditing] = useState<any | null>(null);
-  const [success, setSuccess] = useState("");
+  const [form, setForm] = useState<StaffFormValues>(blankStaff);
+  const [creating, setCreating] = useState(false);
   const [actionError, setActionError] = useState("");
   const [saving, setSaving] = useState(false);
-
-  function startEdit(row: any) {
-    setEditing(row);
-    setForm({
-      name: row.user?.name ?? "",
-      email: row.user?.email ?? "",
-      phone: row.user?.phone ?? "",
-      role: row.user?.role ?? "teacher",
-      classroom_id: row.classroom?.id ? String(row.classroom.id) : "",
-      title: row.title ?? "",
-      status: row.user?.status ?? "active",
-      pin: "",
-    });
-  }
-
-  function resetForm() {
-    setEditing(null);
-    setForm(blank);
-  }
+  const [filter, setFilter] = useState<Filter>("all");
+  const [role, setRole] = useState("");
+  const [query, setQuery] = useState("");
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
-    setSuccess("");
     setActionError("");
     try {
-      const payload = {
-        name: form.name,
-        email: form.email,
-        phone: form.phone || undefined,
-        role: form.role,
-        classroom_id: form.classroom_id || null,
-        title: form.title || undefined,
-        status: form.status,
-        pin: form.pin || undefined,
-      };
-      if (editing) {
-        await staffApi.update(userId(editing), payload);
-        setSuccess("Staff member updated.");
-      } else {
-        await staffApi.create(payload);
-        setSuccess("Staff member created. Invitation email queued so they can set their password.");
-      }
-      resetForm();
+      await staffApi.create(staffPayload(form));
+      toast("Staff member created. Invitation email queued so they can set their password.");
+      setForm(blankStaff);
+      setCreating(false);
       await reload();
     } catch (err) {
       setActionError(friendlyError(getApiError(err).message));
@@ -86,56 +47,77 @@ export function StaffPage() {
     }
   }
 
-  async function action(message: string, run: () => Promise<unknown>) {
-    setSuccess("");
-    setActionError("");
-    try {
-      await run();
-      setSuccess(message);
-      await reload();
-    } catch (err) {
-      setActionError(friendlyError(getApiError(err).message));
-    }
-  }
-
-  function resetPin(row: any) {
-    const pin = window.prompt("Enter a new 4-8 digit staff PIN for tablet mode.");
-    if (!pin) return;
-    if (!/^\d{4,8}$/.test(pin)) {
-      setActionError("PIN must be 4-8 digits.");
-      return;
-    }
-    action("Staff PIN reset.", () => staffApi.resetPin(userId(row), pin));
-  }
+  const staff = (data?.staff ?? []) as any[];
+  const statusOf = (row: any) => String(row.user?.status ?? "active");
+  const counts = useMemo(() => {
+    const result: Record<Filter, number> = { all: staff.length, active: 0, pending_invite: 0, inactive: 0, blocked: 0 };
+    for (const row of staff) { const status = statusOf(row) as Filter; if (status in result) result[status] += 1; }
+    return result;
+  }, [staff]);
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return staff.filter((row) => (filter === "all" || statusOf(row) === filter) && (!role || row.user?.role === role)
+      && (!q || `${row.user?.name ?? ""} ${row.user?.email ?? ""}`.toLowerCase().includes(q)));
+  }, [staff, filter, role, query]);
+  const paged = usePaged(rows, 12, `${filter}|${role}|${query}`);
 
   return (
-    <section className="page">
-      <PageHeader eyebrow="Team" title="Users & Staff" description="Create staff, assign classrooms, update roles, and manage staff PINs for the daycare." />
-      <SuccessAlert message={success} />
-      <ErrorAlert message={actionError} />
-      <Panel title={editing ? "Edit staff member" : "Add staff member"}>
-        <form className="form-grid" onSubmit={submit}>
-          <label className="field-stack"><span>Name</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required /></label>
-          <label className="field-stack"><span>Email</span><input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></label>
-          <label className="field-stack"><span>Phone</span><input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
-          <label className="field-stack"><span>Role</span><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>{roles.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label className="field-stack"><span>Classroom</span><select value={form.classroom_id} onChange={(event) => setForm({ ...form, classroom_id: event.target.value })}><option value="">Unassigned</option>{(data?.classrooms ?? []).map((room: any) => <option key={room.id} value={room.id}>{room.name} - capacity {room.capacity ?? "n/a"}</option>)}</select></label>
-          <label className="field-stack"><span>Job title</span><input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Lead teacher, assistant, manager..." /></label>
-          <label className="field-stack"><span>Status</span><select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option value="active">Active</option><option value="inactive">Inactive</option><option value="blocked">Blocked</option></select></label>
-          <label className="field-stack"><span>{editing ? "New PIN (optional)" : "Staff PIN (optional)"}</span><input type="password" inputMode="numeric" value={form.pin} onChange={(event) => setForm({ ...form, pin: event.target.value })} placeholder="4-8 digits" /></label>
-          <div className="actions full"><button className="primary" disabled={saving}>{saving ? "Saving..." : editing ? "Update staff" : "Add staff"}</button>{editing ? <button type="button" className="secondary" onClick={resetForm}>Cancel</button> : null}<Badge tone="success">Invitation and reset emails are queued through Barbaari email</Badge></div>
-        </form>
-      </Panel>
-      {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : (
-        <DataTable rows={data?.staff ?? []} columns={[
-          { header: "Name", render: (row: any) => <><strong>{row.user?.name}</strong><br /><small>{row.user?.email}</small></> },
-          { header: "Role", render: (row: any) => roleLabel(row.user?.role) },
-          { header: "Classroom", render: (row: any) => row.classroom?.name ?? "Unassigned" },
-          { header: "Title", render: (row: any) => row.title ?? "Not set" },
-          { header: "Status", render: (row: any) => <Badge tone={row.user?.status === "active" ? "success" : row.user?.status === "pending_invite" ? "warning" : "danger"}>{String(row.user?.status ?? "active").replace(/_/g, " ")}</Badge> },
-          { header: "Actions", render: (row: any) => <div className="row-actions"><button className="secondary" onClick={() => startEdit(row)}>Edit</button>{row.user?.status === "active" ? <button className="secondary" onClick={() => action("Staff deactivated.", () => staffApi.deactivate(userId(row)))}>Deactivate</button> : <button className="secondary" onClick={() => action("Staff activated.", () => staffApi.activate(userId(row)))}>Activate</button>}<button className="secondary" onClick={() => resetPin(row)}>Reset PIN</button><button className="secondary" onClick={() => action("Staff invitation email queued.", () => staffApi.sendInvite(userId(row)))}>Send invite</button><button className="secondary" disabled={row.user?.status !== "active"} onClick={() => action("Staff reset email queued.", () => staffApi.sendPasswordReset(userId(row)))}>Send reset email</button></div> }
-        ]} />
+    <main className="bb-page">
+      <PageHeader
+        kicker="Roles, classrooms and tablet PINs for your team"
+        title="Staff access"
+        actions={<button className="bb-btn bb-btn-primary bb-btn-lg" onClick={() => { setForm(blankStaff); setActionError(""); setCreating(true); }}><UserPlus />Add staff member</button>}
+      />
+      {loading && !data ? <LoadingState /> : error ? <ErrorState message={error} onRetry={reload} /> : !staff.length ? (
+        <EmptyState icon={IdentificationBadge} title="No staff yet" action={<button className="bb-btn bb-btn-primary" onClick={() => setCreating(true)}><UserPlus />Add staff member</button>}>Add your teachers and staff. Barbaari emails each of them an invitation to set a password.</EmptyState>
+      ) : (
+        <>
+          <div className="bb-toolbar">
+            <Segmented label="Status" value={filter} onChange={setFilter} items={[
+              { key: "all", label: `All ${counts.all}` },
+              { key: "active", label: `Active ${counts.active}` },
+              { key: "pending_invite", label: `Invite pending ${counts.pending_invite}` },
+              { key: "inactive", label: `Inactive ${counts.inactive}` },
+              { key: "blocked", label: `Blocked ${counts.blocked}` }
+            ]} />
+            <select className="bb-input" aria-label="Role" value={role} onChange={(event) => setRole(event.target.value)}>
+              <option value="">All roles</option>
+              {staffRoles.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+            <span className="bb-grow" />
+            <SearchInput value={query} onChange={setQuery} placeholder="Name or email" />
+          </div>
+          {rows.length ? (
+            <div className="bb-table-wrap">
+              <table className="bb-table">
+                <thead><tr><th>Name</th><th>Role</th><th>Classroom</th><th>Job title</th><th>Status</th><th aria-label="Actions" /></tr></thead>
+                <tbody>
+                  {paged.rows.map((row) => (
+                    <tr key={row.id} className="clickable" onClick={() => navigate(`/staff/${userId(row)}`)}>
+                      <td><div className="bb-person"><Avatar name={row.user?.name} seed={userId(row)} /><div><strong>{row.user?.name}</strong><span>{row.user?.email}</span></div></div></td>
+                      <td>{staffRoleLabel(row.user?.role)}</td>
+                      <td>{row.classroom?.name ?? <span className="bb-muted">Unassigned</span>}</td>
+                      <td>{row.title ?? <span className="bb-muted">—</span>}</td>
+                      <td><StatusBadge map={accountStatuses} value={statusOf(row)} /></td>
+                      <td className="right"><div className="bb-row" style={{ justifyContent: "flex-end", flexWrap: "nowrap", gap: 5 }}><button className="bb-btn bb-btn-secondary" onClick={(event) => { event.stopPropagation(); navigate(`/staff/${userId(row)}`); }}>Edit</button><CaretRight size={18} color="var(--bb-accent)" weight="fill" /></div></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <EmptyState compact title="No staff match">Try a different filter, role or search.</EmptyState>}
+          <Pagination page={paged.page} pageCount={paged.pageCount} total={paged.total} pageSize={paged.pageSize} onChange={paged.setPage} />
+          <p className="bb-note"><EnvelopeSimple size={18} color="var(--bb-accent)" />Invitation and password-reset emails are sent by Barbaari. Staff PINs are 4–8 digits and unlock tablet mode.</p>
+        </>
       )}
-    </section>
+
+      {creating ? (
+        <Drawer title="Add a staff member" onClose={() => setCreating(false)} footer={<><button className="bb-btn bb-btn-secondary bb-btn-lg" onClick={() => setCreating(false)}>Cancel</button><button className="bb-btn bb-btn-primary bb-btn-lg" form="staff-form" disabled={saving}>{saving ? "Saving…" : "Add staff member"}</button></>}>
+          {actionError ? <Alert tone="danger">{actionError}</Alert> : null}
+          <StaffForm id="staff-form" form={form} setForm={setForm} classrooms={data?.classrooms ?? []} onSubmit={submit} />
+          <p className="bb-caption">They’ll get an email invitation to set their password.</p>
+        </Drawer>
+      ) : null}
+    </main>
   );
 }

@@ -3,8 +3,16 @@ import { StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { colors } from "@barbaari/shared";
 import { Button, Card, Screen } from "../components/Ui";
+import { TabletWelcome } from "../components/tablet/TabletWelcome";
+import { useIsTablet } from "../hooks/useIsTablet";
 
+/** Tablets get the redesigned welcome (design/tablet-redesign); phones keep this screen. */
 export default function Index() {
+  const isTablet = useIsTablet();
+  return isTablet ? <TabletWelcome /> : <PhoneIndex />;
+}
+
+function PhoneIndex() {
   return (
     <Screen>
       <View style={styles.container}>
@@ -18,7 +26,7 @@ export default function Index() {
             />
           </View> */}
 
-          <Text style={styles.brand}>Barbaari</Text>
+         
 
           <Text style={styles.title}>
             Attendance Tablet

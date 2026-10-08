@@ -33,7 +33,9 @@
     "android": {
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ],
       "package": "com.pioneeriya.barbaari",
       "blockedPermissions": [
@@ -44,6 +46,13 @@
     },
     "experiments": {
       "tsconfigPaths": false
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d751cfde-302c-4f98-be92-71f35d1ff9cc"
+      }
+    },
+    "owner": "suleiman08810881"
   }
 }

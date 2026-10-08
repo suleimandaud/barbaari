@@ -9,6 +9,7 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 // Route-level code splitting: each page (and the icons it uses) loads on first visit, so the
 // sign-in and shell bundle stays small. AppLayout wraps its <Outlet> in Suspense as well,
 // which keeps the sidebar on screen while a page chunk loads.
+const PrivacyPolicyPage = lazy(() => import("./pages/PrivacyPolicyPage").then((module) => ({ default: module.PrivacyPolicyPage })));
 const ForgotPasswordPage = lazy(() => import("./pages/ForgotPasswordPage").then((module) => ({ default: module.ForgotPasswordPage })));
 const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage").then((module) => ({ default: module.ResetPasswordPage })));
 const AcceptInvitePage = lazy(() => import("./pages/AcceptInvitePage").then((module) => ({ default: module.AcceptInvitePage })));
@@ -44,7 +45,7 @@ export function App() {
   const tabletOnlyHost = typeof window !== "undefined" && window.location.hostname.startsWith("tablet-barbaari.");
 
   if (tabletOnlyHost) {
-    return <IconDefaults><BrowserRouter><Suspense fallback={pageFallback}><Routes><Route path="*" element={<TabletPortalPage />} /></Routes></Suspense></BrowserRouter></IconDefaults>;
+    return <IconDefaults><BrowserRouter><Suspense fallback={pageFallback}><Routes><Route path="/privacy-policy" element={<PrivacyPolicyPage />} /><Route path="*" element={<TabletPortalPage />} /></Routes></Suspense></BrowserRouter></IconDefaults>;
   }
 
   return (
@@ -55,6 +56,7 @@ export function App() {
       <Routes>
         <Route path="/tablet" element={<TabletPortalPage />} />
         <Route path="/tablet/*" element={<TabletPortalPage />} />
+        <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />

@@ -27,7 +27,7 @@ export function LoginPage() {
   }
 
   return (
-    <AuthFrame foot={<span>New daycare? <Link to="/register">Register your organization</Link></span>}>
+    <AuthFrame foot={<><span>New daycare? <Link to="/register">Register your organization</Link></span><Link to="/privacy-policy">Privacy Policy</Link></>}>
       <div>
         <h1>Welcome to Barbaari</h1>
         <p className="bb-lede" style={{ marginTop: 8 }}>Sign in to your daycare.</p>

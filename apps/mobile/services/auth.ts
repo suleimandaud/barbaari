@@ -70,6 +70,25 @@ export async function unlockTablet(mode: "staff" | "admin", email: string, crede
   return response;
 }
 
+/**
+ * Tablet layout unlock: same /auth/tablet-unlock endpoint, but `mode` is omitted so the
+ * backend picks it from the account's role (staff/teacher → staff, admin/manager → admin;
+ * parents are always refused). The credential is sent as both fields; the backend reads
+ * the PIN for staff and the password-or-PIN for admins, with the same lockout either way.
+ */
+export async function unlockTabletForRole(email: string, credential: string) {
+  const response = await authApi.tabletUnlock({
+    email,
+    pin: /^\d{4,8}$/.test(credential) ? credential : undefined,
+    password_or_pin: credential,
+    purpose: "tablet_attendance"
+  });
+  await SecureStore.setItemAsync(TOKEN_KEY, response.token);
+  setBearerToken(response.token);
+  await storeUser(response.user);
+  return response;
+}
+
 export async function registerParentMobile(name: string, email: string, password: string) {
   const response = await authApi.register({ name, email, password, role: "parent" });
   await SecureStore.setItemAsync(TOKEN_KEY, response.token);

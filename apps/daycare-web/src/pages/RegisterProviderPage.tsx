@@ -149,7 +149,7 @@ export function RegisterProviderPage() {
   const full = { style: { gridColumn: "1 / -1" } };
 
   return (
-    <AuthFrame wide foot={<span>Already invited? <Link to="/login">Sign in</Link></span>}>
+    <AuthFrame wide foot={<><span>Already invited? <Link to="/login">Sign in</Link></span><span>By applying you agree to how we handle data in our <Link to="/privacy-policy">Privacy Policy</Link>.</span></>}>
       <div>
         <h1>Register your organization</h1>
         <p className="bb-lede" style={{ marginTop: 8 }}>Apply for Barbaari. The Barbaari team reviews every application before creating your workspace and sending the owner invite.</p>
